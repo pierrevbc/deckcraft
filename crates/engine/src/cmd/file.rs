@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, format?}", has_doc, save_as),
         cmd!(noundo "file.saveTemplate", "Save as Template…", ["File"], None, "{path}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Save to Data", [], None, "{format?: deckcraft|pptx} → {data: base64}", has_doc, save_bytes_cmd),
-        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, dpi?, slides?: [index] | \"1-3,5\", includeHidden?, textLayer?, frame?}", has_doc, export),
+        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, vector?, dpi?, slides?: [index] | \"1-3,5\", includeHidden?, textLayer?, frame?}", has_doc, export),
         cmd!(
             query "file.info",
             "Info",
@@ -127,7 +127,7 @@ pub fn save_bytes(doc: &Presentation, format: &str) -> Result<Vec<u8>> {
     }
 }
 
-/// PDF options from command params: `{layout: slides|notes|handouts, perPage, dpi, slides,
+/// PDF options from command params: `{layout: slides|notes|handouts, perPage, vector, dpi, slides,
 /// includeHidden, textLayer, frame}` for a presentation of `count` slides. `slides` is a list of
 /// 0-based indices or a range as typed in PowerPoint's Print page (`"1-3, 5"`, 1-based).
 pub fn pdf_options(p: &Value, count: usize) -> Result<deckcraft_pdf::PdfOptions> {
@@ -137,6 +137,7 @@ pub fn pdf_options(p: &Value, count: usize) -> Result<deckcraft_pdf::PdfOptions>
         "handouts" => deckcraft_pdf::PageLayout::Handouts { per_page: usize_param(p, "perPage").unwrap_or(6).clamp(1, 9) as u8 },
         _ => deckcraft_pdf::PageLayout::Slides,
     };
+    o.vector = bool_or(p, "vector", true);
     o.dpi = f64_or(p, "dpi", o.dpi).clamp(36.0, 600.0);
     o.slides = match p.get("slides") {
         Some(Value::Array(a)) => Some(a.iter().filter_map(|v| v.as_u64().map(|x| x as usize)).filter(|i| *i < count).collect()),

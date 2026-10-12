@@ -1711,3 +1711,82 @@ fn east_asian_vertical_text_stands_ideographs_upright() {
     let (w, h) = ink(deckcraft_model::text::TextDir::Vertical);
     assert!(h > w * 3, "vert: stroke on its side {w}x{h}");
 }
+
+#[test]
+fn draw_slide_on_a_pixel_canvas_matches_render_slide() {
+    let p = deckcraft_model::defaults::new_presentation(None);
+    let opts = RenderOpts { scale: 0.25, ..Default::default() };
+    let a = render_slide(&p, 0, &opts);
+    let (w, h) = (a.width as u16, a.height as u16);
+    let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+    draw_slide(&mut ctx, &p, 0, &opts, Affine::scale(0.25));
+    let b = RENDERER.with(|r| r.borrow_mut().finish(ctx, w, h));
+    assert_eq!(diff_px(&a, &b), 0);
+}
+
+/// Records what reaches a vector canvas.
+#[derive(Default)]
+struct Recorder {
+    fills: usize,
+    runs: usize,
+    pixels: Vec<Rect>,
+    depth: i32,
+}
+
+impl Canvas for Recorder {
+    fn set_transform(&mut self, _t: Affine) {}
+    fn set_paint_to(&mut self, _p: Paint) {}
+    fn set_stroke(&mut self, _s: kurbo::Stroke) {}
+    fn set_fill_rule(&mut self, _r: canvas::FillRule) {}
+    fn fill_path(&mut self, _p: &BezPath) {
+        self.fills += 1;
+    }
+    fn stroke_path(&mut self, _p: &BezPath) {}
+    fn push_layer(&mut self, _clip: Option<&BezPath>, _opacity: Option<f32>) {
+        self.depth += 1;
+    }
+    fn pop_layer(&mut self) {
+        self.depth -= 1;
+    }
+    fn draw_image(&mut self, _img: &CanvasImage, _alpha: f64) {}
+    fn glyph_run(&mut self, _run: &deckcraft_text::GlyphRun, text: &str, _at: Affine, _opacity: f64) -> bool {
+        assert!(!text.is_empty());
+        self.runs += 1;
+        true
+    }
+    fn fallback(&self) -> Option<Fallback> {
+        Some(Fallback { scale: 1.0, clip: Rect::new(0.0, 0.0, 960.0, 540.0) })
+    }
+    fn draw_pixels(&mut self, img: &Image, dest: Rect) {
+        assert!(img.width > 0 && img.height > 0);
+        self.pixels.push(dest);
+    }
+}
+
+#[test]
+fn vector_canvases_get_paths_and_text_and_effects_as_local_pixels() {
+    let mut sh = Shape {
+        id: ShapeId(600),
+        xfrm: Some(Xfrm::new(50.0, 50.0, 200.0, 100.0)),
+        style: Some(ShapeStyle::accent(deckcraft_color::SchemeSlot::Accent1)),
+        text: Some(TextBody::from_text("Glowing")),
+        ..Default::default()
+    };
+    sh.effects = Some(deckcraft_model::Effects {
+        glow: Some(deckcraft_model::style::Glow { color: ColorRef::rgb(deckcraft_color::Rgba::rgb(255, 200, 0)), radius: 6.0 }),
+        ..Default::default()
+    });
+    let plain = Shape { id: ShapeId(601), xfrm: Some(Xfrm::new(400.0, 50.0, 200.0, 100.0)), ..sh.clone() };
+    let plain = Shape { effects: None, ..plain };
+    let p = deck_with(vec![sh, plain]);
+    let mut rec = Recorder::default();
+    draw_slide(&mut rec, &p, 0, &RenderOpts::default(), Affine::IDENTITY);
+    assert_eq!(rec.depth, 0);
+    // Background and the plain shape are paths; both texts are glyph runs.
+    assert!(rec.fills >= 2, "{}", rec.fills);
+    assert_eq!(rec.runs, 2);
+    // Only the glowing shape is pixels, around it.
+    assert_eq!(rec.pixels.len(), 1);
+    let r = rec.pixels[0];
+    assert!(r.x0 < 50.0 && r.x1 > 250.0 && r.x1 < 300.0 && r.y1 < 220.0, "{r:?}");
+}

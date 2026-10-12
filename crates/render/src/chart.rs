@@ -7,8 +7,8 @@ use deckcraft_model::resolve::Ctx;
 use deckcraft_model::style::{ColorRef, Fill};
 use deckcraft_model::text::{Align, Anchor, Bullet, TextBody};
 use kurbo::{Affine, BezPath, Point, Rect, Shape as _};
-use vello_cpu::RenderContext;
 
+use crate::canvas::Canvas;
 use crate::color;
 
 const SLOTS: [SchemeSlot; 6] =
@@ -59,7 +59,7 @@ fn split_label(name: &str) -> String {
     }
 }
 
-fn label(ctx: &mut RenderContext, rctx: &Ctx, m: Affine, text: &str, r: Rect, size: f64, align: Align, anchor: Anchor, col: Rgba, bold: bool) {
+fn label(ctx: &mut dyn Canvas, rctx: &Ctx, m: Affine, text: &str, r: Rect, size: f64, align: Align, anchor: Anchor, col: Rgba, bold: bool) {
     let mut body = TextBody::from_text(text);
     body.body.inset_l = Some(0.0);
     body.body.inset_r = Some(0.0);
@@ -122,7 +122,7 @@ fn legend_layout(pos: &str, size: (f64, f64), area: Rect, base: f64, overlay: bo
     (origin, if overlay { area } else { plot })
 }
 
-pub fn draw(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f64) {
+pub fn draw(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f64) {
     let text_col = c.text_color.as_ref().map(|t| rctx.color(t, None)).unwrap_or(Rgba::rgb(0x59, 0x59, 0x59));
     let grid_col = Rgba::rgb(0xD9, 0xD9, 0xD9);
     if let Some(f) = &c.chart_fill {
