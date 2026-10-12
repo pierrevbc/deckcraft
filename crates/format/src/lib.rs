@@ -1,8 +1,12 @@
 //! The native `.deckcraft` format: a zip holding `presentation.json` (the model, minus media
 //! bytes), `media/<id>` files with the embedded media, and `mimetype`. Readers ignore unknown
 //! fields, so newer files open in older builds with what those builds understand.
+//!
+//! [`folder`] holds the same document as a `.deck` folder of JSON files, for Git.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+
+pub mod folder;
 
 use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
@@ -104,14 +108,18 @@ pub fn load(bytes: &[u8]) -> Result<Presentation> {
     if m.format != "deckcraft" {
         return Err(FormatError::NotOurs(m.format));
     }
-    let mut p = m.presentation;
+    Ok(finish(m.presentation, |id| read_entry(&mut z, &format!("media/{id}")).ok()))
+}
+
+/// The end of every load: media bytes from `data` (by media id), then [`repair`].
+fn finish(mut p: Presentation, mut data: impl FnMut(u32) -> Option<Vec<u8>>) -> Presentation {
     for item in &mut p.media {
-        if let Ok(data) = read_entry(&mut z, &format!("media/{}", item.id.0)) {
-            item.data = Arc::new(data);
+        if let Some(bytes) = data(item.id.0) {
+            item.data = Arc::new(bytes);
         }
     }
     repair(&mut p);
-    Ok(p)
+    p
 }
 
 /// Make a loaded presentation safe to edit: a master exists, every slide's layout exists,
