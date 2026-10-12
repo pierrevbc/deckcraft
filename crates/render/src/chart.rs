@@ -305,7 +305,7 @@ fn sector(cen: Point, r0: f64, r1: f64, a0: f64, sweep: f64) -> BezPath {
 
 /// Draws one chart: the frame (fill, title, legend) is done; this fills the plot area.
 struct Painter<'a, 'b, 'c> {
-    ctx: &'a mut RenderContext,
+    ctx: &'a mut dyn Canvas,
     rctx: &'a Ctx<'b>,
     c: &'c Chart,
     m: Affine,
