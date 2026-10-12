@@ -139,6 +139,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 | 2026-10-12 | Title bar: Export button next to Save, opening the Export dialog on every platform (a shortcut beside File › Export) |
 | 2026-10-12 | Tables: the caret and text selection show in the cell being edited; clicks and double-clicks place the caret in the clicked cell (and select the word); dragging inner column borders, the right edge and row borders resizes them in one undo step; Tab skips cells hidden under a merge |
 | 2026-10-12 | Every LibreOffice Impress chart type and variant: stacked and 100% lines and areas, points-only and stepped lines, exploded pies and doughnuts, pie and bar of pie, scatter and radar variants, sized bubbles, the four stock charts, column-line combos with a secondary axis, 3-D charts kept through PPTX and drawn with a simple depth; a chart gallery by family ([chart-type-parity.md](docs/chart-type-parity.md)) |
+| 2026-10-12 | Chart data editing for every chart type: data table per type (categories, X/Y, bubble sizes, stock and combo roles), cell edits with decimal comma and gaps, paste from spreadsheets, insert/delete/move rows and series, Switch Row/Column, one undo step per cell; the embedded workbook follows added or removed series and points instead of being rebuilt |
 | 2026-10-11 | Interactive GridCraft spreadsheet data editor for charts; live chart sync on cell edit; chart title and elements options; CSV export / GridCraft launcher; full support and test coverage for the first five chart types (Clustered Column, Clustered Bar, Line, Area, Pie) |
 | 2026-10-12 | Objects off the slide show and can be selected and moved around it in Normal view, as in PowerPoint; the show, exports and thumbnails still clip to the slide (#270) |
 | 2026-10-12 | Korean, Japanese and Chinese input: IME composition shown in place and underlined, one undo step per composition, candidate window at the caret (slide text, notes, fields); interface text (title, notes, outline, sections, comments) borrows installed fonts for scripts the interface fonts lack (#101) |
@@ -162,6 +163,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 | 2026-10-13 | trivial | Progress log: wild text cases |
 | 2026-10-12 | minor | Progress log: table cell editing and border resizing |
 | 2026-10-12 | minor | Progress log: every LibreOffice chart type and variant |
+| 2026-10-12 | minor | Progress log: chart data editing for every chart type |
 | 2026-10-12 | trivial | Progress log: File tab (Backstage, #76) |
 | 2026-10-12 | trivial | Progress log: lines in scaled groups (#233) |
 | 2026-10-10 | minor | Readiness-by-audience table with hours to ~95% for full, mainstream and essentials |
