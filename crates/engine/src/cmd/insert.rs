@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart…",
             ["Insert", "Illustrations"],
             None,
-            "{type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|stock|columnLine|… (a ChartPreset id: stackedColumn, column3d, explodedPie, pieOfPie, lineSmooth, stockOhlc…), rect?, categories?: [..], series?: [{name, values, xValues?, sizes?}], editData?: bool (open the data editor)}",
+            "{type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|stock|columnLine|… (a ChartPreset id: stackedColumn, column3d, explodedPie, pieOfPie, lineSmooth, stockOhlc…), rect?, categories?: [..], series?: [{name, values, xValues?, sizes?}], volume?, open?, high?, low?, close?: [..] (stock), editData?: bool (open the data editor)}",
             has_slide,
             chart
         ),
@@ -64,7 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Data",
             ["Chart Design", "Data"],
             None,
-            "{categories?: [..], series?: [{name, values, xValues?, sizes?}] (numbers, numeric text or null for a gap), xValues?: [..] (every series), title?: string, id?}",
+            "{categories?: [..], series?: [{name, values, xValues?, sizes?}] (numbers, numeric text or null for a gap), xValues?: [..] (every series), volume?, open?, high?, low?, close?: [..] (stock series by role, instead of series), title?: string, id?}",
             has_selection,
             chart_data
         ),
@@ -454,7 +454,7 @@ fn chart(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(cats) = p.get("categories").and_then(Value::as_array) {
         c.categories = cats.iter().map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).collect();
     }
-    if let Some(series) = p.get("series").and_then(Value::as_array) {
+    if let Some(series) = super::chartdata::stock_series(p).or_else(|| p.get("series").and_then(Value::as_array).cloned()) {
         c.series = series.iter().take(deckcraft_model::chart_data::MAX_SERIES).map(|sv| super::chartdata::series_from(sv, None)).collect();
     }
     c.fit_data();
@@ -676,8 +676,8 @@ fn chart_data(s: &mut Session, p: &Value) -> Result<Value> {
         .get("categories")
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).collect());
-    let series: Option<Vec<Value>> =
-        p.get("series").and_then(Value::as_array).map(|a| a.iter().take(deckcraft_model::chart_data::MAX_SERIES).cloned().collect());
+    let series: Option<Vec<Value>> = super::chartdata::stock_series(p)
+        .or_else(|| p.get("series").and_then(Value::as_array).map(|a| a.iter().take(deckcraft_model::chart_data::MAX_SERIES).cloned().collect()));
     let shared_x = super::chartdata::numbers(p.get("xValues"));
     with_chart(s, p, "chart.data", |c| {
         if let Some(t) = p.get("title").and_then(Value::as_str) {
