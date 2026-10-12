@@ -2304,10 +2304,9 @@ fn table_layout(app: &mut SlideApp, ui: &mut Ui) {
 }
 
 fn chart_design(app: &mut SlideApp, ui: &mut Ui) {
-    let ch = app
-        .session
-        .active()
-        .and_then(|d| d.selected_shapes().into_iter().find_map(|s| if let ShapeKind::Chart(c) = &s.kind { Some(((**c).clone(), s.id)) } else { None }));
+    let ch = app.session.active().and_then(|d| {
+        d.selected_shapes().into_iter().find_map(|s| if let ShapeKind::Chart(c) = &s.kind { Some(((**c).clone(), s.id)) } else { None })
+    });
     group(ui, |ui| {
         let r = big_button(ui, Icon::ChangeChartType, "Change\nChart Type", ch.is_some());
         egui::Popup::menu(&r).show(|ui| {

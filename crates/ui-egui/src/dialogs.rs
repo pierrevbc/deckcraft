@@ -65,19 +65,11 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     let mut open = true;
     let mut close = false;
     let is_chart = d.id == "chartData";
-    let mut win = egui::Window::new(title(&d.id))
-        .id(egui::Id::new(("dialog", d.id.clone())))
-        .collapsible(false)
-        .open(&mut open);
+    let mut win = egui::Window::new(title(&d.id)).id(egui::Id::new(("dialog", d.id.clone()))).collapsible(false).open(&mut open);
     if is_chart {
-        win = win
-            .resizable(true)
-            .default_size(vec2(580.0, 400.0))
-            .min_size(vec2(420.0, 260.0));
+        win = win.resizable(true).default_size(vec2(580.0, 400.0)).min_size(vec2(420.0, 260.0));
     } else {
-        win = win
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0));
+        win = win.resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0));
     }
     win.show(ctx, |ui| {
         ui.set_min_width(if is_chart { 460.0 } else { 340.0 });
@@ -620,18 +612,14 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 
             // GridCraft header banner
             let gc_green = Color32::from_rgb(0x10, 0x7C, 0x41);
-            egui::Frame::NONE
-                .fill(gc_green)
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(egui::Margin::symmetric(10, 6))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("📊 GridCraft Spreadsheet Data").color(Color32::WHITE).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new("Live chart sync").color(Color32::from_rgb(0xD0, 0xF0, 0xDD)).small());
-                        });
+            egui::Frame::NONE.fill(gc_green).corner_radius(CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📊 GridCraft Spreadsheet Data").color(Color32::WHITE).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new("Live chart sync").color(Color32::from_rgb(0xD0, 0xF0, 0xDD)).small());
                     });
                 });
+            });
             ui.add_space(6.0);
 
             // Chart Title editor
@@ -669,13 +657,13 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 for (i, cat) in c.categories.iter().enumerate() {
                     let mut row = vec![cat.clone()];
                     for s in &c.series {
-                        let v_str = s.values.get(i).copied().flatten().map(|v| {
-                            if (v - v.round()).abs() < 1e-9 && v.abs() < 1e15 {
-                                format!("{}", v.round() as i64)
-                            } else {
-                                format!("{v}")
-                            }
-                        }).unwrap_or_default();
+                        let v_str = s
+                            .values
+                            .get(i)
+                            .copied()
+                            .flatten()
+                            .map(|v| if (v - v.round()).abs() < 1e-9 && v.abs() < 1e15 { format!("{}", v.round() as i64) } else { format!("{v}") })
+                            .unwrap_or_default();
                         row.push(v_str);
                     }
                     g.push(row);
@@ -687,48 +675,37 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let mut cell_changed = false;
 
             egui::ScrollArea::both().max_height(200.0).show(ui, |ui| {
-                egui::Grid::new("gridcraft_chart_table")
-                    .striped(true)
-                    .spacing(vec2(2.0, 2.0))
-                    .show(ui, |ui| {
-                        // Header row with column letters (Corner, A, B, C...)
-                        ui.label(egui::RichText::new("").small());
-                        for col_idx in 0..num_cols {
-                            let col_letter = (b'A' + (col_idx as u8).min(25)) as char;
-                            let hdr_txt = if col_idx == 0 {
-                                format!("{col_letter} (Categories)")
+                egui::Grid::new("gridcraft_chart_table").striped(true).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+                    // Header row with column letters (Corner, A, B, C...)
+                    ui.label(egui::RichText::new("").small());
+                    for col_idx in 0..num_cols {
+                        let col_letter = (b'A' + (col_idx as u8).min(25)) as char;
+                        let hdr_txt = if col_idx == 0 { format!("{col_letter} (Categories)") } else { format!("{col_letter}") };
+                        let hdr_color = if col_idx == 0 { Color32::from_rgb(0x70, 0x30, 0xA0) } else { Color32::from_rgb(0x10, 0x7C, 0x41) };
+                        ui.label(egui::RichText::new(hdr_txt).color(hdr_color).small().strong());
+                    }
+                    ui.end_row();
+
+                    // Data rows with row numbers (1, 2, 3...)
+                    for (r_idx, row) in grid.iter_mut().enumerate() {
+                        let row_num = format!("{}", r_idx + 1);
+                        ui.label(egui::RichText::new(row_num).color(Color32::from_gray(120)).small().strong());
+
+                        for (c_idx, cell) in row.iter_mut().enumerate() {
+                            let width = if c_idx == 0 { 95.0 } else { 75.0 };
+                            let is_header = r_idx == 0 || c_idx == 0;
+                            let te = ui.add(egui::TextEdit::singleline(cell).desired_width(width).text_color(if is_header {
+                                Color32::from_gray(20)
                             } else {
-                                format!("{col_letter}")
-                            };
-                            let hdr_color = if col_idx == 0 {
-                                Color32::from_rgb(0x70, 0x30, 0xA0)
-                            } else {
-                                Color32::from_rgb(0x10, 0x7C, 0x41)
-                            };
-                            ui.label(egui::RichText::new(hdr_txt).color(hdr_color).small().strong());
+                                Color32::BLACK
+                            }));
+                            if te.changed() {
+                                cell_changed = true;
+                            }
                         }
                         ui.end_row();
-
-                        // Data rows with row numbers (1, 2, 3...)
-                        for (r_idx, row) in grid.iter_mut().enumerate() {
-                            let row_num = format!("{}", r_idx + 1);
-                            ui.label(egui::RichText::new(row_num).color(Color32::from_gray(120)).small().strong());
-
-                            for (c_idx, cell) in row.iter_mut().enumerate() {
-                                let width = if c_idx == 0 { 95.0 } else { 75.0 };
-                                let is_header = r_idx == 0 || c_idx == 0;
-                                let te = ui.add(
-                                    egui::TextEdit::singleline(cell)
-                                        .desired_width(width)
-                                        .text_color(if is_header { Color32::from_gray(20) } else { Color32::BLACK })
-                                );
-                                if te.changed() {
-                                    cell_changed = true;
-                                }
-                            }
-                            ui.end_row();
-                        }
-                    });
+                    }
+                });
             });
 
             if cell_changed {
@@ -777,7 +754,11 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.separator();
             let mut close_dialog = false;
             ui.horizontal(|ui| {
-                if ui.button(egui::RichText::new("⊞ Open in GridCraft").strong()).on_hover_text("Export data to CSV and launch GridCraft spreadsheet").clicked() {
+                if ui
+                    .button(egui::RichText::new("⊞ Open in GridCraft").strong())
+                    .on_hover_text("Export data to CSV and launch GridCraft spreadsheet")
+                    .clicked()
+                {
                     let _ = app.run("chart.gridcraft", json!({"id": id.0}));
                     app.set_status("Chart data exported for GridCraft");
                 }

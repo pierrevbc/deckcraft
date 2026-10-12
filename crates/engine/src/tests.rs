@@ -1483,16 +1483,17 @@ fn chart_first_five_types_and_gridcraft_flow() {
 
     // 3. Test chart.data command with custom categories, series, and title
     let new_cats = vec!["Jan", "Feb", "Mar"];
-    let new_series = vec![
-        json!({"name": "Product A", "values": [12.5, 18.0, 24.3]}),
-        json!({"name": "Product B", "values": [8.0, 14.2, 19.5]}),
-    ];
-    s.execute("chart.data", &json!({
-        "id": chart_id,
-        "title": "Q1 Product Sales",
-        "categories": new_cats,
-        "series": new_series
-    })).unwrap();
+    let new_series = vec![json!({"name": "Product A", "values": [12.5, 18.0, 24.3]}), json!({"name": "Product B", "values": [8.0, 14.2, 19.5]})];
+    s.execute(
+        "chart.data",
+        &json!({
+            "id": chart_id,
+            "title": "Q1 Product Sales",
+            "categories": new_cats,
+            "series": new_series
+        }),
+    )
+    .unwrap();
 
     let st = s.doc().unwrap();
     let sh = st.shape(deckcraft_model::ShapeId(chart_id)).unwrap();
