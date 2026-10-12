@@ -3,16 +3,13 @@
 > **Generated:** 2026-10-12 (summary by `cargo xtask parity`; rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; Export to PDF re-scored 2026-10-12) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The summary between `<!-- SUMMARY -->
-**Weighted breadth parity: 80%** over 191 features.
-**Weighted breadth parity: 80%** over 192 features.
+**Weighted breadth parity: 81%** over 193 features.
 
 | Priority | Features | Done | Partial | Missing | Parity |
 |---|---|---|---|---|---|
-| P0 | 72 | 62 | 10 | 0 | 93% |
-| P1 | 65 | 38 | 21 | 6 | 75% |
-| P2 | 54 | 13 | 15 | 26 | 38% |
-| P1 | 66 | 40 | 20 | 6 | 76% |
-| P2 | 54 | 13 | 14 | 27 | 37% |
+| P0 | 72 | 63 | 9 | 0 | 94% |
+| P1 | 67 | 41 | 20 | 6 | 76% |
+| P2 | 54 | 14 | 14 | 26 | 39% |
 
 | Area | Parity |
 |---|---|
@@ -26,7 +23,7 @@ The summary between `<!-- SUMMARY -->
 | Arrange | 100% |
 | Text | 80% |
 | Tables | 89% |
-| Charts | 92% |
+| Charts | 96% |
 | SmartArt | 33% |
 | Pictures | 48% |
 | Media | 67% |
@@ -39,8 +36,7 @@ The summary between `<!-- SUMMARY -->
 | Automation (✱) | 100% |
 | Platforms (✱) | 67% |
 
-Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design), Format Shape pane, Font, size, bold, italic, underline, strikethrough (only Regular/Bold/Italic faces, #69), Edit chart data, Crop (and crop to shape, aspect ratio), Paste image from clipboard (fails on Windows and Linux, #53), Audio/video playback in the show (WMA/WMV not decodable yet), Animation pane (reorder, timing), Presenter view (notes, next slide, timer), macOS, Windows, Linux builds.
-Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design), Export to PDF (slides, notes pages, handouts; text layer, links, bookmarks; vector artwork pending), Format Shape pane, Font, size, bold, italic, underline, strikethrough (only Regular/Bold/Italic faces, #69), Crop (and crop to shape, aspect ratio), Paste image from clipboard (fails on Windows and Linux, #53), Audio/video playback in the show (WMA/WMV not decodable yet), Animation pane (reorder, timing), Presenter view (notes, next slide, timer), macOS, Windows, Linux builds.
+Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design), Format Shape pane, Font, size, bold, italic, underline, strikethrough (only Regular/Bold/Italic faces, #69), Crop (and crop to shape, aspect ratio), Paste image from clipboard (fails on Windows and Linux, #53), Audio/video playback in the show (WMA/WMV not decodable yet), Animation pane (reorder, timing), Presenter view (notes, next slide, timer), macOS, Windows, Linux builds.
 
 ## Rows
 
@@ -180,7 +176,8 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Charts | Other chart types (radar, stock, combo with secondary axis, bubble: done; waterfall, funnel, treemap, sunburst, histogram, box: missing) | P2 | P |
 | Charts | Edit chart data | P0 | D |
 | Charts | Chart elements (title, legend, labels, axes, gridlines) | P1 | D |
-| Charts | Chart styles and colours | P2 | P |
+| Charts | Format chart elements (fonts, fills, borders, axis scale and labels, number formats, data label parts, series and point looks) | P1 | D |
+| Charts | Chart styles and colours | P2 | D |
 | SmartArt | Insert SmartArt (lists, processes, cycles, hierarchy) | P1 | P |
 | SmartArt | Text pane and layout switching | P2 | M |
 | Pictures | Insert picture (PNG, JPEG, GIF, WebP, BMP, TIFF) | P0 | D |

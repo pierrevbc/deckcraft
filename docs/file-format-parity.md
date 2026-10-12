@@ -75,6 +75,7 @@ the round trip even though DeckCraft doesn't model it.
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; the embedded workbook is kept, its changed cells updated in place, or generated from the chart data for new charts |
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md) |
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md); the embedded workbook is kept, updated cell by cell when the data changes (ranges and the table over them follow added or removed series and points), generated otherwise |
+| Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md); formatting (`spPr` fills, gradients and dashes, `txPr` and title runs, legend, axes, gridlines, `numFmt`, `dLbls`, markers, explosion, `dPt`, `firstSliceAng`) read and written on every plot group (secondary axes keep their defaults); the embedded workbook is kept, updated cell by cell when the data changes (ranges and the table over them follow added or removed series and points), generated otherwise |
 | Charts (`cx:` chartex: waterfall, funnel, treemap, sunburst, histogram, box) | no | no | |
 | SmartArt (`dgm`) | drawing part only, as a group; text laid out on its `dsp:txXfrm` rectangle | as shapes | Diagram data model lost on save |
 | Equations (OMML, `a14:m`) | no | no | PR #55 open |
@@ -106,6 +107,7 @@ the round trip even though DeckCraft doesn't model it.
 | 2026-10-12 | minor | PDF export draws slides as vectors and real text through the renderer's canvas; effects and patterns rasterize per element |
 | 2026-10-12 | minor | Chart parts: every chart type and variant read and written ([chart-type-parity.md](chart-type-parity.md)) |
 | 2026-10-12 | minor | Charts: embedded workbook kept and updated in place |
+| 2026-10-12 | minor | Chart formatting round-trips (`crates/pptx/tests/chart_format.rs`) |
 | 2026-10-12 | minor | EMF/WMF text and pattern brushes drawn; OLE (VML) and ActiveX previews read |
 | 2026-10-12 | minor | Text warps rendered; their adjust values read and written |
 | 2026-10-12 | trivial | Groups with a small legacy child coordinate space draw outlines, dashes, arrowheads and ink at their own width (#233) |
