@@ -103,7 +103,7 @@ fn export_tool_lists_pdf_and_its_options() {
     }
     assert_eq!(props["layout"]["enum"], json!(["slides", "notes", "handouts"]));
     assert_eq!(props["perPage"]["enum"], json!([1, 2, 3, 4, 6, 9]));
-    for p in ["dpi", "slides", "includeHidden", "textLayer", "frame"] {
+    for p in ["vector", "dpi", "slides", "includeHidden", "textLayer", "frame"] {
         assert!(props.get(p).is_some(), "{p}: {export}");
     }
     // What the schema describes is accepted.

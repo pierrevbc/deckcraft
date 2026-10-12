@@ -8,7 +8,9 @@ use deckcraft_model::text::{Anchor, TextBody, TextDir};
 use deckcraft_model::{Presentation, Shape};
 use deckcraft_text::Fields;
 use kurbo::{Affine, BezPath, Rect, Shape as _};
-use vello_cpu::{RenderContext, peniko};
+use vello_cpu::peniko;
+
+use crate::canvas::Canvas;
 
 use crate::color;
 
@@ -179,7 +181,7 @@ pub fn cell_rects(t: &Table, heights: &[f64]) -> Vec<(usize, usize, Rect)> {
     out
 }
 
-pub fn draw(ctx: &mut RenderContext, pres: &Presentation, rctx: &Ctx, t: &Table, m: Affine, _w: f64, _h: f64, fields: &dyn deckcraft_text::Fields) {
+pub fn draw(ctx: &mut dyn Canvas, pres: &Presentation, rctx: &Ctx, t: &Table, m: Affine, _w: f64, _h: f64, fields: &dyn deckcraft_text::Fields) {
     let _ = pres;
     let rects = cell_rects(t, &row_heights(rctx, t, fields));
     for (r, c, rect) in &rects {

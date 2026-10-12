@@ -3,16 +3,17 @@
 use deckcraft_color::Rgba;
 use deckcraft_geom::preset::FillMode;
 use deckcraft_model::resolve::Ctx;
-use deckcraft_model::style::{Fill, GradientShape, PictureFill, PictureMode};
+use deckcraft_model::style::{Fill, GradientShape, PictureAdjust, PictureFill, PictureMode};
 use deckcraft_model::{PhType, Presentation};
 use kurbo::{Affine, BezPath, Point, Rect, Shape as _};
-use vello_cpu::{RenderContext, peniko};
+use vello_cpu::peniko;
 
+use crate::canvas::{self, Canvas, CanvasImage, Paint};
 use crate::{color, images, shade};
 
 #[allow(clippy::too_many_arguments)]
 pub fn fill_path(
-    ctx: &mut RenderContext,
+    ctx: &mut dyn Canvas,
     rctx: &Ctx,
     fill: &Fill,
     ph: Option<Rgba>,
@@ -35,10 +36,10 @@ pub fn fill_path(
             if g.stops.is_empty() {
                 return;
             }
-            let mut stops: Vec<(f32, peniko::Color)> =
-                g.stops.iter().map(|s| (s.pos.clamp(0.0, 1.0) as f32, color(shade(rctx.color(&s.color, ph), mode), alpha))).collect();
+            let fade = |c: Rgba| c.with_alpha((c.a as f64 * alpha.clamp(0.0, 1.0)).round().clamp(0.0, 255.0) as u8);
+            let mut stops: Vec<(f32, Rgba)> =
+                g.stops.iter().map(|s| (s.pos.clamp(0.0, 1.0) as f32, fade(shade(rctx.color(&s.color, ph), mode)))).collect();
             stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let stops: Vec<peniko::ColorStop> = stops.into_iter().map(|(o, c)| peniko::ColorStop { offset: o, color: c.into() }).collect();
             let grad = match &g.shape {
                 GradientShape::Linear { angle, .. } => {
                     // Angle measured clockwise from left→right; span the bounds along that direction.
@@ -46,8 +47,7 @@ pub fn fill_path(
                     let (dx, dy) = (a.cos(), a.sin());
                     let c = bounds.center();
                     let half = (bounds.width() * dx.abs() + bounds.height() * dy.abs()) / 2.0;
-                    peniko::Gradient::new_linear(Point::new(c.x - dx * half, c.y - dy * half), Point::new(c.x + dx * half, c.y + dy * half))
-                        .with_stops(stops.as_slice())
+                    Paint::Linear { start: Point::new(c.x - dx * half, c.y - dy * half), end: Point::new(c.x + dx * half, c.y + dy * half), stops }
                 }
                 GradientShape::Path { focus, .. } => {
                     let fx = bounds.x0 + bounds.width() * (focus[0] + (1.0 - focus[2])) / 2.0;
@@ -57,7 +57,7 @@ pub fn fill_path(
                         .iter()
                         .map(|(x, y)| ((x - fx).powi(2) + (y - fy).powi(2)).sqrt())
                         .fold(1e-6, f64::max);
-                    peniko::Gradient::new_radial(Point::new(fx, fy), r as f32).with_stops(stops.as_slice())
+                    Paint::Radial { center: Point::new(fx, fy), radius: r, stops }
                 }
             };
             ctx.set_paint(grad);
@@ -69,6 +69,12 @@ pub fn fill_path(
             ctx.pop_layer();
         }
         Fill::Pattern(p) => {
+            // Vector canvases: the pattern as pixels over this path's area.
+            if let Some(fb) = ctx.fallback() {
+                let area = m.transform_rect_bbox(path.bounding_box());
+                canvas::rasterize(ctx, fb, area, &mut |v, pre| fill_path(v, rctx, fill, ph, path, bounds, pre * m, mode, alpha, pres));
+                return;
+            }
             let fg = rctx.color(&p.fg, ph);
             let bg = rctx.color(&p.bg, ph);
             ctx.set_paint(color(bg, alpha));
@@ -82,7 +88,7 @@ pub fn fill_path(
 }
 
 /// Draw a pattern's foreground marks over `bounds` (8 pt cells).
-fn pattern(ctx: &mut RenderContext, preset: &str, b: Rect, m: Affine) {
+fn pattern(ctx: &mut dyn Canvas, preset: &str, b: Rect, m: Affine) {
     let k = crate::scale_of(m);
     let cell = 6.0 / if k.is_finite() { k.clamp(0.25, 4.0) } else { 1.0 };
     let cell = cell.max(2.0);
@@ -122,19 +128,32 @@ fn p_add(_a: &mut BezPath, _b: &mut BezPath) {}
 
 /// Draw a picture fill into `bounds` (shape-local) honouring crop and stretch/tile modes; an animated
 /// GIF shows its frame at `gif_time` seconds.
-pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, bounds: Rect, m: Affine, gif_time: Option<f64>) {
+pub fn picture(ctx: &mut dyn Canvas, pres: &Presentation, pf: &PictureFill, bounds: Rect, m: Affine, gif_time: Option<f64>) {
     let Some(item) = pres.media(pf.media) else {
         missing(ctx, bounds);
         return;
     };
-    let px_scale = crate::scale_of(m);
-    let want = (bounds.width().max(bounds.height()) * px_scale).max(1.0);
-    let frame = gif_time.and_then(|t| images::gif_pixmap(&item.data, &pf.adjust, t));
-    let Some(pm) = frame.or_else(|| images::decode_for(&item.data, want, &pf.adjust)) else {
-        missing(ctx, bounds);
-        return;
+    let fallback = ctx.fallback();
+    // Vector canvases embed an unchanged JPEG or PNG file as it is.
+    let encoded = fallback
+        .filter(|_| gif_time.is_none() && pf.adjust == PictureAdjust::default())
+        .and_then(|_| images::encoded_size(&item.data))
+        .map(|(w, h)| CanvasImage { width: w as f64, height: h as f64, pixmap: None, encoded: Some(&item.data) });
+    let image = match encoded {
+        Some(img) => img,
+        None => {
+            // Pixels at the canvas's resolution (print resolution on vector canvases).
+            let px_scale = crate::scale_of(m) * fallback.map_or(1.0, |f| f.scale);
+            let want = (bounds.width().max(bounds.height()) * px_scale).max(1.0);
+            let frame = gif_time.and_then(|t| images::gif_pixmap(&item.data, &pf.adjust, t));
+            let Some(pm) = frame.or_else(|| images::decode_for(&item.data, want, &pf.adjust)) else {
+                missing(ctx, bounds);
+                return;
+            };
+            CanvasImage { width: pm.width() as f64, height: pm.height() as f64, pixmap: Some(pm), encoded: None }
+        }
     };
-    let (iw, ih) = (pm.width() as f64, pm.height() as f64);
+    let (iw, ih) = (image.width, image.height);
     if iw < 1.0 || ih < 1.0 {
         return;
     }
@@ -152,10 +171,6 @@ pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, b
         PictureMode::Tile { .. } => bounds,
     };
     let alpha = pf.alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-    let image = vello_cpu::Image {
-        image: vello_cpu::ImageSource::Pixmap(pm.clone()),
-        sampler: peniko::ImageSampler { quality: peniko::ImageQuality::High, ..Default::default() },
-    };
     if let PictureMode::Tile { sx, sy, tx, ty, .. } = &pf.mode {
         let (sx, sy) = (if *sx > 0.0 { *sx } else { 1.0 }, if *sy > 0.0 { *sy } else { 1.0 });
         let tile_w = iw * 0.75 * sx;
@@ -174,20 +189,13 @@ pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, b
     draw_image(ctx, &image, iw, ih, dest, m, alpha);
 }
 
-fn draw_image(ctx: &mut RenderContext, image: &vello_cpu::Image, iw: f64, ih: f64, dest: Rect, m: Affine, alpha: f64) {
+fn draw_image(ctx: &mut dyn Canvas, image: &CanvasImage, iw: f64, ih: f64, dest: Rect, m: Affine, alpha: f64) {
     let t = m * Affine::translate(dest.origin().to_vec2()) * Affine::scale_non_uniform(dest.width() / iw, dest.height() / ih);
     ctx.set_transform(t);
-    if alpha < 0.999 {
-        ctx.push_layer(None, None, Some(alpha as f32), None, None);
-    }
-    ctx.set_paint(image.clone());
-    ctx.fill_rect(&Rect::new(0.0, 0.0, iw, ih));
-    if alpha < 0.999 {
-        ctx.pop_layer();
-    }
+    ctx.draw_image(image, alpha);
 }
 
-fn missing(ctx: &mut RenderContext, b: Rect) {
+fn missing(ctx: &mut dyn Canvas, b: Rect) {
     ctx.set_paint(peniko::Color::from_rgba8(230, 230, 230, 255));
     ctx.fill_rect(&b);
     ctx.set_paint(peniko::Color::from_rgba8(160, 160, 160, 255));
@@ -201,7 +209,7 @@ fn missing(ctx: &mut RenderContext, b: Rect) {
 }
 
 /// The speaker / film glyph on audio and video objects without a poster.
-pub fn media_glyph(ctx: &mut RenderContext, video: bool, b: Rect) {
+pub fn media_glyph(ctx: &mut dyn Canvas, video: bool, b: Rect) {
     let s = b.width().min(b.height());
     let c = b.center();
     if video {
@@ -238,7 +246,7 @@ pub fn media_glyph(ctx: &mut RenderContext, video: bool, b: Rect) {
 }
 
 /// A content-type icon drawn in empty picture/chart/table placeholders.
-pub fn placeholder_icon(ctx: &mut RenderContext, kind: PhType, b: Rect) {
+pub fn placeholder_icon(ctx: &mut dyn Canvas, kind: PhType, b: Rect) {
     let s = (b.width().min(b.height()) * 0.18).clamp(10.0, 48.0);
     let c = Point::new(b.center().x, b.center().y - s * 0.3);
     let r = Rect::new(c.x - s / 2.0, c.y - s / 2.0, c.x + s / 2.0, c.y + s / 2.0);

@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, format?}", has_doc, save_as),
         cmd!(noundo "file.saveTemplate", "Save as Template…", ["File"], None, "{path}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Save to Data", [], None, "{format?: deckcraft|pptx} → {data: base64}", has_doc, save_bytes_cmd),
-        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, dpi?, slides?: [index], includeHidden?, textLayer?, frame?}", has_doc, export),
+        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, vector?, dpi?, slides?: [index], includeHidden?, textLayer?, frame?}", has_doc, export),
         cmd!(query "file.render", "Render Slide", [], None, "{slide?: index, scale?, edit?: bool} → {png: base64, width, height}", has_doc, render),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{}", has_doc, close),
         cmd!(
@@ -114,8 +114,8 @@ pub fn save_bytes(doc: &Presentation, format: &str) -> Result<Vec<u8>> {
     }
 }
 
-/// PDF options from command params: `{layout: slides|notes|handouts, perPage, dpi, slides: [i],
-/// includeHidden, textLayer, frame}`.
+/// PDF options from command params: `{layout: slides|notes|handouts, perPage, vector, dpi,
+/// slides: [i], includeHidden, textLayer, frame}`.
 pub fn pdf_options(p: &Value) -> deckcraft_pdf::PdfOptions {
     let mut o = deckcraft_pdf::PdfOptions { layout: deckcraft_pdf::PageLayout::Slides, ..Default::default() };
     o.layout = match str_param(p, "layout").unwrap_or("slides") {
@@ -123,6 +123,7 @@ pub fn pdf_options(p: &Value) -> deckcraft_pdf::PdfOptions {
         "handouts" => deckcraft_pdf::PageLayout::Handouts { per_page: usize_param(p, "perPage").unwrap_or(6).min(9) as u8 },
         _ => deckcraft_pdf::PageLayout::Slides,
     };
+    o.vector = bool_or(p, "vector", true);
     o.dpi = f64_or(p, "dpi", o.dpi).clamp(36.0, 600.0);
     o.slides = p.get("slides").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(|x| x as usize)).collect());
     o.include_hidden = bool_or(p, "includeHidden", false);
