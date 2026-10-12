@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::MediaId;
+pub use crate::chart_format::{ChartFormat, SeriesFormat};
 use crate::style::{ColorRef, Fill, Line};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -572,6 +573,9 @@ pub struct Series {
     /// source data's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number_format: Option<String>,
+    /// Marker size and colours, invert if negative, pie explosion.
+    #[serde(skip_serializing_if = "SeriesFormat::is_default")]
+    pub format: SeriesFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -620,6 +624,9 @@ pub struct Chart {
     pub y2_hidden: bool,
     /// The chart's language (`c:lang`, e.g. `ru-RU`): digit grouping and decimal mark.
     pub lang: Option<String>,
+    /// Fonts, element boxes, axes, gridlines and data label options.
+    #[serde(skip_serializing_if = "ChartFormat::is_default")]
+    pub format: ChartFormat,
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -712,6 +719,7 @@ impl Default for Chart {
             y2_format: None,
             y2_hidden: false,
             lang: None,
+            format: ChartFormat::default(),
             raw: None,
             workbook: None,
             source: None,
