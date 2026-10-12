@@ -1,6 +1,7 @@
 //! An imported chart keeps the workbook PowerPoint opens for Edit Data: as it was when only the
-//! presentation of the chart changes, with just the changed cells rewritten when its data changes,
-//! and rebuilt from the chart data only when the data no longer fits the original ranges.
+//! presentation of the chart changes, with just the changed cells rewritten when its data changes
+//! (ranges and the table over them following added or removed series and points), and rebuilt
+//! from the chart data only when the data can't be written where the workbook holds it.
 //!
 //! Decks and workbooks are built here, in code.
 
@@ -311,23 +312,298 @@ fn a_value_over_a_formula_replaces_it() {
     assert_eq!(part(&out, "xl/worksheets/sheet2.xml"), part(&book, "xl/worksheets/sheet2.xml"));
 }
 
+/// The cells of a worksheet by reference (`B2`): the text or number they show (shared strings
+/// looked up, formulas by their cached value), empty cells left out.
+fn cells(book: &[u8], sheet: &str) -> std::collections::BTreeMap<String, String> {
+    use quick_xml::events::Event;
+    let read = |name: &str| part(book, name).unwrap_or_default();
+    let mut strings = vec![];
+    let sst = read("xl/sharedStrings.xml");
+    let mut r = quick_xml::Reader::from_str(&sst);
+    let mut cur: Option<String> = None;
+    loop {
+        match r.read_event().expect("xml") {
+            Event::Start(e) if e.local_name().as_ref() == b"si" => cur = Some(String::new()),
+            Event::Text(t) => {
+                if let Some(c) = cur.as_mut() {
+                    c.push_str(&t.decode().expect("text"));
+                }
+            }
+            Event::End(e) if e.local_name().as_ref() == b"si" => strings.push(cur.take().unwrap_or_default()),
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let xml = read(sheet);
+    let mut r = quick_xml::Reader::from_str(&xml);
+    let mut out = std::collections::BTreeMap::new();
+    let (mut at, mut kind, mut text, mut inside) = (String::new(), String::new(), String::new(), false);
+    loop {
+        match r.read_event().expect("xml") {
+            Event::Start(e) if e.local_name().as_ref() == b"c" => {
+                let attr = |k: &[u8]| e.attributes().flatten().find(|a| a.key.as_ref() == k).map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                at = attr(b"r").unwrap_or_default();
+                kind = attr(b"t").unwrap_or_default();
+                text.clear();
+            }
+            Event::Start(e) if matches!(e.local_name().as_ref(), b"v" | b"t") => inside = true,
+            Event::End(e) if matches!(e.local_name().as_ref(), b"v" | b"t") => inside = false,
+            Event::Text(t) if inside => text.push_str(&t.decode().expect("text")),
+            Event::End(e) if e.local_name().as_ref() == b"c" => {
+                let v = if kind == "s" { text.parse::<usize>().ok().and_then(|i| strings.get(i).cloned()).unwrap_or_default() } else { text.clone() };
+                if !v.is_empty() {
+                    out.insert(at.clone(), v);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+fn cell(map: &std::collections::BTreeMap<String, String>, at: &str) -> String {
+    map.get(at).cloned().unwrap_or_default()
+}
+
+/// The chart formulas of the exported chart part, in order.
+fn formulas(pptx: &[u8]) -> Vec<String> {
+    let xml = part(pptx, "ppt/charts/chart1.xml").expect("chart");
+    xml.split("<c:f>").skip(1).filter_map(|s| s.split("</c:f>").next()).map(String::from).collect()
+}
+
+/// Everything in the workbook but the data sheet and the table is as it was (the workbook part
+/// may only gain `fullCalcOnLoad`, the calculation chain may go).
+fn rest_unchanged(before: &[u8], after: &[u8]) {
+    for (name, data) in entries(before) {
+        if [SHEET, "xl/tables/table1.xml", "xl/workbook.xml", "xl/calcChain.xml", "xl/_rels/workbook.xml.rels", "[Content_Types].xml"]
+            .contains(&name.as_str())
+        {
+            continue;
+        }
+        assert_eq!(entries(after).into_iter().find(|(n, _)| *n == name).map(|(_, d)| d), Some(data), "{name}");
+    }
+}
+
 #[test]
-fn added_series_or_points_rebuild_the_workbook() {
+fn an_added_series_goes_next_to_the_last_one() {
     let (pptx, book) = imported_deck();
-    for (cats, series) in [
-        (QS, vec![("Series 1", S1), ("Series 2", S2), ("Series 3", S3), ("Series 4", S1)]),
-        (&["Q1", "Q2", "Q3", "Q4", "Q5"][..], vec![("Series 1", &[4.2, 2.8, 3.6, 4.7, 1.0][..]), ("Series 2", S2), ("Series 3", S3)]),
-    ] {
+    let (mut s, id) = session(&pptx);
+    data(&mut s, id, QS, &[("Series 1", S1), ("Series 2", S2), ("Series 3", S3), ("Margin", &[1.5, 2.5, 3.5, 4.5])]);
+    let out = export(&s);
+    let wb = embedded(&out);
+    rest_unchanged(&book, &wb);
+    let c = cells(&wb, SHEET);
+    assert_eq!([cell(&c, "E1"), cell(&c, "E2"), cell(&c, "E5")], ["Margin", "1.5", "4.5"]);
+    assert_eq!(cell(&c, "F1"), "Total");
+    // The table over the chart data takes the new column, named after the series.
+    let table = part(&wb, "xl/tables/table1.xml").expect("table");
+    assert!(table.contains(r#"ref="A1:E5""#) && table.contains(r#"<tableColumn id="5" name="Margin"/>"#), "{table}");
+    assert!(table.contains(r#"<tableColumns count="5">"#), "{table}");
+    let f = formulas(&out);
+    assert!(f.contains(&"'Chart data'!$E$1".to_string()) && f.contains(&"'Chart data'!$E$2:$E$5".to_string()), "{f:?}");
+    assert!(f.contains(&"'Chart data'!$D$2:$D$5".to_string()), "{f:?}");
+}
+
+#[test]
+fn a_series_where_the_workbook_holds_something_else_rebuilds_it() {
+    // A fifth series would go to column F, where the workbook has a total.
+    let (pptx, book) = imported_deck();
+    let (mut s, id) = session(&pptx);
+    data(&mut s, id, QS, &[("Series 1", S1), ("Series 2", S2), ("Series 3", S3), ("Series 4", S1), ("Series 5", S2)]);
+    let out = export(&s);
+    assert_ne!(embedded(&out), book);
+    assert!(formulas(&out).contains(&"Sheet1!$F$1".to_string()));
+    let names: Vec<String> = entries(&embedded(&out)).into_iter().map(|(n, _)| n).collect();
+    assert!(!names.iter().any(|n| n.contains("sheet2") || n.contains("table")), "{names:?}");
+}
+
+#[test]
+fn added_points_extend_the_ranges() {
+    let (pptx, book) = imported_deck();
+    let (mut s, id) = session(&pptx);
+    data(&mut s, id, &["Q1", "Q2", "Q3", "Q4", "Q5"], &[("Series 1", &[4.2, 2.8, 3.6, 4.7, 1.0][..]), ("Series 2", S2), ("Series 3", S3)]);
+    let out = export(&s);
+    let wb = embedded(&out);
+    rest_unchanged(&book, &wb);
+    let c = cells(&wb, SHEET);
+    assert_eq!([cell(&c, "A6"), cell(&c, "B6"), cell(&c, "C6"), cell(&c, "D6")], ["Q5", "1", "", ""]);
+    // The formulas in the sheet are kept.
+    let sheet = part(&wb, SHEET).expect("sheet");
+    assert!(sheet.contains("<f>SUM(B2:B5)</f>") && sheet.contains("<f>2*2.55</f>"), "{sheet}");
+    assert!(part(&wb, "xl/tables/table1.xml").expect("table").contains(r#"ref="A1:D6""#));
+    let f = formulas(&out);
+    for want in ["'Chart data'!$A$2:$A$6", "'Chart data'!$B$2:$B$6", "'Chart data'!$D$2:$D$6", "'Chart data'!$B$1"] {
+        assert!(f.contains(&want.to_string()), "{want}: {f:?}");
+    }
+}
+
+#[test]
+fn removed_series_and_points_clear_their_cells() {
+    let (pptx, book) = imported_deck();
+    let (mut s, id) = session(&pptx);
+    s.execute("chart.deleteSeries", &json!({"id": id, "at": 2})).expect("delete series");
+    s.execute("chart.deleteRows", &json!({"id": id, "at": 3})).expect("delete row");
+    let out = export(&s);
+    let wb = embedded(&out);
+    rest_unchanged(&book, &wb);
+    let c = cells(&wb, SHEET);
+    for gone in ["D1", "D2", "D4", "D5", "A5", "B5", "C5"] {
+        assert_eq!(cell(&c, gone), "", "{gone}");
+    }
+    assert_eq!([cell(&c, "A4"), cell(&c, "C4"), cell(&c, "F1"), cell(&c, "F2")], ["Q3", "1.9", "Total", "15.3"]);
+    let table = part(&wb, "xl/tables/table1.xml").expect("table");
+    assert!(table.contains(r#"ref="A1:C4""#) && table.contains(r#"<tableColumns count="3">"#) && !table.contains("Series 3"), "{table}");
+    // D5 held a formula: the calculation chain goes.
+    assert!(part(&wb, "xl/calcChain.xml").is_none());
+    let f = formulas(&out);
+    assert!(f.contains(&"'Chart data'!$C$2:$C$4".to_string()) && !f.iter().any(|f| f.contains("$D$")), "{f:?}");
+}
+
+#[test]
+fn a_middle_series_removed_moves_the_next_ones_left() {
+    let (pptx, book) = imported_deck();
+    let (mut s, id) = session(&pptx);
+    s.execute("chart.deleteSeries", &json!({"id": id, "at": 0})).expect("delete series");
+    let wb = embedded(&export(&s));
+    rest_unchanged(&book, &wb);
+    let c = cells(&wb, SHEET);
+    assert_eq!([cell(&c, "B1"), cell(&c, "B2"), cell(&c, "C1"), cell(&c, "C5"), cell(&c, "D1")], ["Series 2", "2.6", "Series 3", "5.1", ""]);
+    let table = part(&wb, "xl/tables/table1.xml").expect("table");
+    assert!(table.contains(r#"ref="A1:C5""#) && table.contains(r#"name="Series 2""#) && table.contains(r#"name="Series 3""#), "{table}");
+}
+
+#[test]
+fn rows_and_columns_switched_in_place() {
+    let (pptx, book) = imported_deck();
+    let (mut s, id) = session(&pptx);
+    s.execute("chart.switchRowColumn", &json!({"id": id})).expect("switch");
+    let out = export(&s);
+    let wb = embedded(&out);
+    rest_unchanged(&book, &wb);
+    let c = cells(&wb, SHEET);
+    assert_eq!([cell(&c, "B1"), cell(&c, "E1"), cell(&c, "A2"), cell(&c, "A4"), cell(&c, "E4")], ["Q1", "Q4", "Series 1", "Series 3", "5.1"]);
+    assert_eq!([cell(&c, "A5"), cell(&c, "B5")], ["", ""]);
+    let table = part(&wb, "xl/tables/table1.xml").expect("table");
+    assert!(table.contains(r#"ref="A1:E4""#) && table.contains(r#"name="Q1""#) && table.contains(r#"<tableColumn id="5" name="Q4"/>"#), "{table}");
+    assert!(formulas(&out).contains(&"'Chart data'!$E$2:$E$4".to_string()));
+}
+
+/// Each value the exported chart part caches is in the workbook cell its formula names.
+fn assert_in_step(out: &[u8], what: &str) {
+    let wb = embedded(out);
+    let c = cells(&wb, SHEET);
+    let xml = part(out, "ppt/charts/chart1.xml").expect("chart");
+    for r in xml.split("<c:f>").skip(1) {
+        let (f, rest) = r.split_once("</c:f>").expect("formula");
+        let cache = rest.split("</c:strCache>").next().and_then(|c| c.split("</c:numCache>").next()).unwrap_or("");
+        let refs = f.rsplit_once('!').map_or(f, |(_, r)| r).replace('$', "");
+        let (a, b) = refs.split_once(':').unwrap_or((&refs, &refs));
+        let split = |x: &str| {
+            let i = x.find(|ch: char| ch.is_ascii_digit()).expect("row");
+            (x[..i].to_string(), x[i..].parse::<usize>().expect("row"))
+        };
+        let ((ca, ra), (cb, rb)) = (split(a), split(b));
+        let at: Vec<String> = if ca == cb {
+            (ra..=rb).map(|r| format!("{ca}{r}")).collect()
+        } else {
+            (ca.as_bytes()[0]..=cb.as_bytes()[0]).map(|ch| format!("{}{ra}", ch as char)).collect()
+        };
+        for (i, cellref) in at.iter().enumerate() {
+            let want = cache
+                .split(&format!("<c:pt idx=\"{i}\"><c:v>"))
+                .nth(1)
+                .and_then(|v| v.split("</c:v>").next())
+                .map(|v| v.replace("&amp;", "&"))
+                .unwrap_or_default();
+            assert_eq!(cell(&c, cellref), want, "{what}: {f} [{i}]");
+        }
+    }
+}
+
+fn run_steps(s: &mut Session, id: u32, steps: &[(&str, serde_json::Value)]) {
+    for (cmd, p) in steps {
+        let mut p = p.clone();
+        p["id"] = json!(id);
+        s.execute(cmd, &p).expect(cmd);
+    }
+}
+
+#[test]
+fn every_data_edit_keeps_workbook_and_chart_in_step() {
+    let (pptx, _) = imported_deck();
+    let edits: Vec<Vec<(&str, serde_json::Value)>> = vec![
+        vec![("chart.insertRows", json!({"at": 0}))],
+        vec![("chart.insertSeries", json!({"at": 1, "name": "New"}))],
+        vec![("chart.moveSeries", json!({"from": 0, "to": 2})), ("chart.moveRow", json!({"from": 3, "to": 0}))],
+        vec![("chart.paste", json!({"row": 3, "col": 2, "text": "7\t8\n9\t10\n11\t12"}))],
+        vec![("chart.setCell", json!({"row": 2, "col": 3, "value": ""})), ("chart.setCell", json!({"row": 0, "col": 1, "value": "Renamed"}))],
+        vec![("chart.deleteRows", json!({"at": 0, "count": 3}))],
+    ];
+    for steps in edits {
         let (mut s, id) = session(&pptx);
-        data(&mut s, id, cats, &series);
+        run_steps(&mut s, id, &steps);
         let out = export(&s);
-        let rebuilt = embedded(&out);
-        assert_ne!(rebuilt, book);
-        // The workbook DeckCraft writes for a new chart: one sheet, the formulas follow it.
-        let names: Vec<String> = entries(&rebuilt).into_iter().map(|(n, _)| n).collect();
-        assert!(!names.iter().any(|n| n.contains("sheet2") || n.contains("table")), "{names:?}");
-        let xml = part(&out, "ppt/charts/chart1.xml").expect("chart");
-        assert!(xml.contains("<c:f>Sheet1!$B$1</c:f>") && !xml.contains("Chart data"), "{xml}");
+        assert!(part(&out, "ppt/charts/chart1.xml").expect("chart").contains("'Chart data'!"), "{steps:?} rebuilt the workbook");
+        assert_in_step(&out, &format!("{steps:?}"));
+    }
+}
+
+/// A deck with one chart of `kind` made here, its workbook carrying an extra part: a workbook
+/// updated in place keeps it, a rebuilt one doesn't.
+fn marked_deck(chart: Chart) -> Vec<u8> {
+    let mut p = defaults::new_presentation(None);
+    let shape = Shape { id: ShapeId(p.alloc_id()), kind: ShapeKind::Chart(Box::new(chart)), ..Default::default() };
+    Arc::make_mut(&mut p.slides[0]).shapes.push(shape);
+    let out = deckcraft_pptx::export(&p).expect("export");
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (n, d) in entries(&embedded(&out)) {
+        z.start_file(n.as_str(), SimpleFileOptions::default()).expect("start");
+        z.write_all(&d).expect("write");
+    }
+    z.start_file("customXml/marker.xml", SimpleFileOptions::default()).expect("start");
+    z.write_all(b"<marker/>").expect("write");
+    let book = z.finish().expect("finish").into_inner();
+    replace(&out, "ppt/embeddings/workbook1.xlsx", &book)
+}
+
+#[test]
+fn every_chart_type_grows_and_shrinks_in_place() {
+    let mut own_x = Chart::sample(ChartType::Scatter);
+    own_x.series[1].x_values = vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0)];
+    let mut stock = Chart::sample(ChartType::Line);
+    stock.kind = ChartType::Stock;
+    let charts = [
+        Chart::sample(ChartType::Line),
+        Chart::sample(ChartType::Pie),
+        Chart::sample(ChartType::Radar),
+        Chart::sample(ChartType::Scatter),
+        own_x,
+        Chart::sample(ChartType::Bubble),
+        stock,
+    ];
+    let edits: Vec<Vec<(&str, serde_json::Value)>> = vec![
+        vec![("chart.insertRows", json!({}))],
+        vec![("chart.insertSeries", json!({}))],
+        vec![("chart.insertSeries", json!({})), ("chart.insertRows", json!({"at": 1, "count": 2}))],
+        vec![("chart.deleteRows", json!({"at": 1}))],
+        vec![("chart.deleteSeries", json!({"at": 0}))],
+        vec![("chart.paste", json!({"row": 1, "col": 1, "text": "1\t2\n3\t4\n5\t6\n7\t8\n9\t10"}))],
+    ];
+    for chart in charts {
+        let kind = chart.kind;
+        let pptx = marked_deck(chart);
+        for steps in &edits {
+            let (mut s, id) = session(&pptx);
+            if kind == ChartType::Pie && steps.iter().any(|(c, _)| *c == "chart.deleteSeries") {
+                continue;
+            }
+            run_steps(&mut s, id, steps);
+            let out = export(&s);
+            let what = format!("{kind:?} {steps:?}");
+            assert!(part(&embedded(&out), "customXml/marker.xml").is_some(), "{what}: workbook rebuilt");
+            assert_in_step(&out, &what);
+        }
     }
 }
 
