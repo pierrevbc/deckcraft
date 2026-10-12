@@ -17,7 +17,7 @@ Coordinates are slide points (1/72 inch; a 16:9 slide is 960 × 540) unless note
 | `document.inspect` | — | Slides, sections, layouts, shapes, selection |
 | `ui.inspect` | — | UI state, active tool, window/canvas/slide rects, dialog, Home (start screen over the open presentations), slide show state, documents, perf (fps, render ms) |
 | `ui.tool.select` | `{tool, preset?}` | `select`, `text`, `shape` + preset, any preset name, `curve`, `freeform`, `scribble`, `pen`, `highlighter`, `eraser` |
-| `ui.pointer` | `{events: [{kind: down\|drag\|up\|move\|doubleclick\|tripleclick, x, y, mods?}], mods?}` | Drive the active tool in slide points through the same code path as the mouse |
+| `ui.pointer` | `{events: [{kind: down\|drag\|up\|move\|doubleclick\|tripleclick\|contextclick, x, y, mods?}], mods?}` | Drive the active tool in slide points through the same code path as the mouse (`contextclick`: the right-button press that selects before the context menu) |
 | `ui.key` / `ui.text` | `{key, shift?, alt?, cmd?}` / `{text}` | Keyboard input (also drives a running slide show) |
 | `ui.move` / `ui.click` / `ui.drag` | screen points | Real egui pointer input — reaches every widget, menu and pane |
 | `ui.set` | `{tab?, view?, pane?, notes?, zoom?, brightness?, ruler?, gridlines?, guides?, …}` | UI state (returns the full state) |
