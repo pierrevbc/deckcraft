@@ -980,6 +980,8 @@ dependencies = [
 name = "deckcraft-format"
 version = "0.6.1"
 dependencies = [
+ "deckcraft-color",
+ "deckcraft-geom",
  "deckcraft-model",
  "serde",
  "serde_json",
