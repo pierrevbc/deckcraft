@@ -43,6 +43,7 @@ pub struct Exp<'a> {
     n_image: u32,
     n_media: u32,
     n_chart: u32,
+    n_embedding: u32,
     pub slide_parts: HashMap<SlideId, String>,
     pub table_styles: Vec<String>,
     placeholder: Option<String>,
@@ -161,8 +162,38 @@ impl Exp<'_> {
     pub fn chart_rel(&mut self, o: &mut Out, c: &deckcraft_model::Chart) -> String {
         self.n_chart += 1;
         let name = format!("ppt/charts/chart{}.xml", self.n_chart);
-        self.pkg.xml_part(&name, CT_CHART, chart::chart_xml(c));
+        let mut co = Out::new(&name);
+        let kept = chart::unchanged(c);
+        let workbook = self.chart_workbook(&mut co, c, kept.is_some());
+        self.pkg.xml_part(&name, CT_CHART, chart::chart_xml(c, kept, workbook.as_deref()));
+        self.pkg.rels(&name, &co.rels);
         o.rels.add_new("chart", &opc::relative(&o.name, &name), false)
+    }
+    /// The relationship from chart part `co` to the workbook PowerPoint opens for Edit Data: the
+    /// chart's own workbook when the chart is unchanged (its formulas point into it), otherwise
+    /// one generated from the chart data. Each chart gets its own copy.
+    fn chart_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart, kept: bool) -> Option<String> {
+        if !kept {
+            let data = chart::workbook_xlsx(c)?;
+            let part = self.embedding("xlsx", chart::CT_XLSX, data);
+            return Some(co.rels.add("package", &opc::relative(&co.name, &part), false));
+        }
+        let p = self.p;
+        let m = p.media(c.workbook?)?;
+        if m.data.is_empty() {
+            let link = m.link.as_deref()?;
+            return Some(co.rels.add("oleObject", link, true));
+        }
+        let (kind, ext) = if m.content_type == chart::CT_XLSX { ("package", "xlsx") } else { ("oleObject", "bin") };
+        let part = self.embedding(ext, &m.content_type, m.data.as_ref().clone());
+        Some(co.rels.add(kind, &opc::relative(&co.name, &part), false))
+    }
+    /// A new part under `ppt/embeddings/`.
+    fn embedding(&mut self, ext: &str, content_type: &str, data: Vec<u8>) -> String {
+        self.n_embedding += 1;
+        let name = format!("ppt/embeddings/workbook{}.{ext}", self.n_embedding);
+        self.pkg.binary(&name, content_type, data);
+        name
     }
 }
 
@@ -385,6 +416,7 @@ pub fn export(p: &Presentation) -> Result<Vec<u8>, PptxError> {
         n_image: 0,
         n_media: 0,
         n_chart: 0,
+        n_embedding: 0,
         slide_parts: HashMap::new(),
         table_styles: vec![],
         placeholder: None,
