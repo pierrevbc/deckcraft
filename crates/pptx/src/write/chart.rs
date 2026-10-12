@@ -1,13 +1,20 @@
 //! Chart parts: a `c:chartSpace` with cached categories and values, and the workbook that holds
-//! the chart data (what PowerPoint opens for Edit Data). An unchanged chart keeps its original
-//! part and workbook; otherwise both are written from the model, the workbook laid out where the
-//! part's formulas point.
+//! the chart data (what PowerPoint opens for Edit Data).
+//!
+//! - An unchanged chart keeps its original part and workbook.
+//! - An imported chart whose data still fits its original ranges ([`source`]) is written from the
+//!   model with its original formulas. Its workbook is kept byte for byte when only the
+//!   presentation changed (title, type, legend…); when the data changed, only the cells that
+//!   changed are rewritten in it.
+//! - Otherwise (a new chart, series or points added or removed…) both are written from the model,
+//!   the workbook laid out where the part's formulas point.
 
 use std::collections::BTreeMap;
 
 use deckcraft_model::chart::{Chart, ChartType, Series};
 use deckcraft_model::style::Fill;
 
+use super::xlsx::{Edit, Value};
 use crate::opc::{NS_A, NS_C, NS_R, PackageOut, RelsOut};
 use crate::xml::{A, El, W};
 
@@ -79,6 +86,101 @@ fn layout(c: &Chart) -> Vec<Cols> {
 /// `Sheet1!$B$2:$B$5`: rows 2 to `last` of column `c`.
 fn range(c: usize, last: usize) -> String {
     format!("Sheet1!${0}$2:${0}${last}", col(c))
+}
+
+/// The workbook formulas of one series in the chart part.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Refs {
+    name: String,
+    /// Categories, or X values.
+    x: String,
+    y: String,
+    size: String,
+}
+
+/// Formulas into the workbook [`workbook_xlsx`] writes.
+fn generated_refs(c: &Chart) -> Vec<Refs> {
+    c.series
+        .iter()
+        .zip(layout(c))
+        .map(|(s, k)| {
+            let last = c.categories.len().max(s.values.len()) + 1;
+            Refs { name: format!("Sheet1!${}$1", col(k.y)), x: range(k.x, last), y: range(k.y, last), size: range(k.size.unwrap_or(k.y + 1), last) }
+        })
+        .collect()
+}
+
+/// An edited chart whose data still fits where its workbook holds it: the formulas of the
+/// imported chart part, and the cells to update for the data that changed since (none when only
+/// the title, type, legend or other options changed).
+pub struct Source {
+    pub refs: Vec<Refs>,
+    pub edits: Vec<Edit>,
+}
+
+/// Cells of `formula` whose number changed.
+fn number_edits(edits: &mut Vec<Edit>, formula: &str, now: &[Option<f64>], was: &[Option<f64>]) {
+    for (index, (a, b)) in now.iter().zip(was).enumerate() {
+        if a != b {
+            let value = a.filter(|v| v.is_finite()).map_or(Value::Blank, Value::Number);
+            edits.push(Edit { formula: formula.to_string(), index, value });
+        }
+    }
+}
+
+/// [`Source`] of a chart read from a PPTX. `None` when the data no longer fits the original
+/// ranges: series or points added or removed, a category chart turned into a scatter or bubble
+/// chart (or back), data the chart part held as literals rather than formulas. The chart then
+/// gets a workbook of its own, as a new chart does.
+pub fn source(c: &Chart) -> Option<Source> {
+    let src = c.source.as_ref()?;
+    let xy = matches!(c.kind, ChartType::Scatter | ChartType::Bubble);
+    if src.xy != xy || src.series.len() != c.series.len() || (!xy && c.categories.len() != src.categories.len()) {
+        return None;
+    }
+    let mut refs = vec![];
+    let mut edits = vec![];
+    for (s, o) in c.series.iter().zip(&src.series) {
+        let r = Refs {
+            name: o.name_ref.clone()?,
+            x: o.categories_ref.clone()?,
+            y: o.values_ref.clone()?,
+            size: if c.kind == ChartType::Bubble { o.sizes_ref.clone()? } else { o.sizes_ref.clone().unwrap_or_default() },
+        };
+        if s.values.len() != o.values.len() {
+            return None;
+        }
+        if s.name != o.name {
+            edits.push(Edit { formula: r.name.clone(), index: 0, value: Value::Text(s.name.clone()) });
+        }
+        number_edits(&mut edits, &r.y, &s.values, &o.values);
+        if xy {
+            if s.x_values.len() != o.x_values.len() {
+                return None;
+            }
+            number_edits(&mut edits, &r.x, &s.x_values, &o.x_values);
+        }
+        if c.kind == ChartType::Bubble {
+            if s.sizes.len() != o.sizes.len() {
+                return None;
+            }
+            number_edits(&mut edits, &r.size, &s.sizes, &o.sizes);
+        }
+        refs.push(r);
+    }
+    if !xy {
+        let mut ranges: Vec<&str> = refs.iter().map(|r| r.x.as_str()).collect();
+        ranges.sort_unstable();
+        ranges.dedup();
+        for (index, (a, b)) in c.categories.iter().zip(&src.categories).enumerate() {
+            if a != b {
+                for f in &ranges {
+                    edits.push(Edit { formula: f.to_string(), index, value: Value::Text(a.clone()) });
+                }
+            }
+        }
+    }
+    Some(Source { refs, edits })
 }
 
 fn simple_fill(w: &mut W, f: &Fill) {
@@ -192,12 +294,12 @@ fn group_of(k: ChartType) -> Group {
     }
 }
 
-fn series(w: &mut W, c: &Chart, s: &Series, i: usize, k: Cols, kind: ChartType, g: Group) {
+fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType, g: Group) {
     w.open0("c:ser");
     w.val("c:idx", i);
     w.val("c:order", i);
     w.open0("c:tx");
-    str_cache(w, &format!("Sheet1!${}$1", col(k.y)), std::slice::from_ref(&s.name));
+    str_cache(w, &r.name, std::slice::from_ref(&s.name));
     w.close("c:tx");
     sp_pr(w, s.fill.as_ref(), s.line.as_ref());
     if g == Group::Bar {
@@ -233,18 +335,16 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, k: Cols, kind: ChartType, 
     if let Some(d) = s.data_labels {
         data_labels(w, d);
     }
-    let n = c.categories.len().max(s.values.len());
-    let last = n + 1;
     if matches!(g, Group::Scatter | Group::Bubble) {
         w.open0("c:xVal");
-        num_cache(w, &range(k.x, last), &xs(s));
+        num_cache(w, &r.x, &xs(s));
         w.close("c:xVal");
         w.open0("c:yVal");
-        num_cache(w, &range(k.y, last), &s.values);
+        num_cache(w, &r.y, &s.values);
         w.close("c:yVal");
         if g == Group::Bubble {
             w.open0("c:bubbleSize");
-            num_cache(w, &range(k.size.unwrap_or(k.y + 1), last), &sizes(s));
+            num_cache(w, &r.size, &sizes(s));
             w.close("c:bubbleSize");
             w.val("c:bubble3D", 0);
         } else {
@@ -252,10 +352,10 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, k: Cols, kind: ChartType, 
         }
     } else {
         w.open0("c:cat");
-        str_cache(w, &range(k.x, last), &c.categories);
+        str_cache(w, &r.x, &c.categories);
         w.close("c:cat");
         w.open0("c:val");
-        num_cache(w, &range(k.y, last), &s.values);
+        num_cache(w, &r.y, &s.values);
         w.close("c:val");
         if g == Group::Line {
             w.val("c:smooth", if s.smooth { 1 } else { 0 });
@@ -356,7 +456,7 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
     w.close("c:valAx");
 }
 
-fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], cols: &[Cols]) {
+fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], refs: &[Refs]) {
     let g = group_of(kind);
     let grouping = if kind.percent() {
         "percentStacked"
@@ -391,7 +491,7 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
     }
     w.val("c:varyColors", vary);
     for (i, s) in list {
-        series(w, c, s, *i, cols.get(*i).copied().unwrap_or_default(), kind, g);
+        series(w, c, s, *i, refs.get(*i).unwrap_or(&Refs::default()), kind, g);
     }
     if c.data_labels {
         data_labels(w, true);
@@ -448,8 +548,9 @@ fn set_rid(e: &mut El, rid: &str) {
 }
 
 /// The chart part XML. `kept` is the original part from [`unchanged`]; `workbook` is the id of
-/// the relationship to the data workbook, when one is written.
-pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>) -> Vec<u8> {
+/// the relationship to the data workbook, when one is written; `refs` are the series formulas
+/// into it, those of [`source`] or, when `None`, those of the workbook [`workbook_xlsx`] writes.
+pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>, refs: Option<&[Refs]>) -> Vec<u8> {
     if let Some(mut keep) = kept {
         keep.remove_all(&["userShapes"]);
         match workbook {
@@ -464,7 +565,7 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>) -> Vec<u8>
         w.raw(&keep.to_xml());
         return w.finish();
     }
-    let cols = layout(c);
+    let refs = refs.map(<[Refs]>::to_vec).unwrap_or_else(|| generated_refs(c));
     let mut w = W::new();
     w.open("c:chartSpace", A::new().a("xmlns:c", NS_C).a("xmlns:a", NS_A).a("xmlns:r", NS_R));
     w.val("c:date1904", 0);
@@ -506,7 +607,7 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>) -> Vec<u8>
                 })
                 .copied()
                 .collect();
-            plot_group(&mut w, c, k, &list, &cols);
+            plot_group(&mut w, c, k, &list, &refs);
         }
         axes(&mut w, c, Group::Bar);
     } else {
@@ -532,7 +633,7 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>) -> Vec<u8>
         ) {
             log::warn!("pptx: {} chart written as a column chart", c.kind.label());
         }
-        plot_group(&mut w, c, main, &indexed, &cols);
+        plot_group(&mut w, c, main, &indexed, &refs);
         let g = group_of(main);
         if !matches!(g, Group::Pie | Group::Doughnut) {
             axes(&mut w, c, g);
@@ -718,7 +819,7 @@ mod tests {
 
     /// Every cached value of the chart part is in the workbook cell its formula points to.
     fn assert_formulas_match(c: &Chart) {
-        let xml = chart_xml(c, None, Some("rId1"));
+        let xml = chart_xml(c, None, Some("rId1"), None);
         let book = sheet_cells(&workbook_xlsx(c).unwrap());
         let doc = crate::xml::parse(&xml).unwrap();
         assert!(doc.root.child("externalData").and_then(|e| e.attr("r:id")) == Some("rId1"));
@@ -775,7 +876,7 @@ mod tests {
 
     #[test]
     fn unchanged_chart_keeps_its_part_and_workbook_link() {
-        let first = chart_xml(&Chart::sample(ChartType::Column), None, Some("rId7"));
+        let first = chart_xml(&Chart::sample(ChartType::Column), None, Some("rId7"), None);
         // The chart as an import leaves it: read back from the part, which it keeps.
         let doc = crate::xml::parse(&first).unwrap();
         let mut read = crate::read::chart_from_el(&doc.root).unwrap();
@@ -783,10 +884,10 @@ mod tests {
         read.workbook = Some(MediaId(42));
         let kept = unchanged(&read);
         assert!(kept.is_some());
-        let again = String::from_utf8(chart_xml(&read, kept, Some("rId1"))).unwrap();
+        let again = String::from_utf8(chart_xml(&read, kept, Some("rId1"), None)).unwrap();
         assert!(again.contains(r#"<c:externalData r:id="rId1"><c:autoUpdate val="0"/></c:externalData>"#), "{again}");
         // No workbook to write: the reference goes too.
-        let bare = String::from_utf8(chart_xml(&read, unchanged(&read), None)).unwrap();
+        let bare = String::from_utf8(chart_xml(&read, unchanged(&read), None, None)).unwrap();
         assert!(!bare.contains("externalData"));
         // Edited data: the part is rewritten from the model.
         let mut edited = read.clone();
