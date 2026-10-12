@@ -40,13 +40,7 @@ pub enum ChartType {
 
 impl ChartType {
     /// The first five primary chart types: Clustered Column, Clustered Bar, Line, Area, Pie.
-    pub const FIRST_FIVE: [ChartType; 5] = [
-        ChartType::Column,
-        ChartType::Bar,
-        ChartType::Line,
-        ChartType::Area,
-        ChartType::Pie,
-    ];
+    pub const FIRST_FIVE: [ChartType; 5] = [ChartType::Column, ChartType::Bar, ChartType::Line, ChartType::Area, ChartType::Pie];
     pub const MAIN: [ChartType; 12] = [
         ChartType::Column,
         ChartType::Bar,
@@ -362,11 +356,7 @@ impl Chart {
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
+    if s.contains(',') || s.contains('"') || s.contains('\n') { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
 }
 
 fn parse_csv_line(line: &str) -> Vec<String> {
@@ -443,10 +433,7 @@ mod tests {
 
     #[test]
     fn first_five_types_and_csv_roundtrip() {
-        assert_eq!(
-            ChartType::FIRST_FIVE.map(|k| k.label()),
-            ["Clustered Column", "Clustered Bar", "Line", "Area", "Pie"]
-        );
+        assert_eq!(ChartType::FIRST_FIVE.map(|k| k.label()), ["Clustered Column", "Clustered Bar", "Line", "Area", "Pie"]);
         for kind in ChartType::FIRST_FIVE {
             let orig = Chart::sample(kind);
             let csv = orig.to_csv();
