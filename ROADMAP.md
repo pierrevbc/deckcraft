@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~20 points and ~120–210 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: every LibreOffice chart type and variant; previous: minor, progress log: table cell editing and border resizing) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: every LibreOffice chart type and variant, chart data editing and chart formatting for every type; previous: minor, progress log: every LibreOffice chart type and variant) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 DeckCraft aims at full PowerPoint parity, and to be better: faster, open (a documented zip+JSON
 format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and available everywhere
@@ -160,6 +160,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 |---|---|---|
 | 2026-10-12 | minor | Progress log: every LibreOffice chart type and variant |
 | 2026-10-12 | minor | Progress log: chart data editing for every chart type |
+| 2026-10-12 | minor | Progress log: chart formatting on every chart type |
 | 2026-10-12 | minor | Progress log: table cell editing and border resizing |
 | 2026-10-12 | trivial | Progress log: File tab (Backstage, #76) |
 | 2026-10-12 | trivial | Progress log: lines in scaled groups (#233) |

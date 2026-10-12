@@ -1,6 +1,6 @@
 # Chart type parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** major (created; every LibreOffice Impress chart type and variant audited, then filled in) · **Target:** the chart types of LibreOffice Impress 26 and their PowerPoint counterparts
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (data editing and formatting per type; previous: major, created; every LibreOffice Impress chart type and variant audited, then filled in) · **Target:** the chart types of LibreOffice Impress 26 and their PowerPoint counterparts
 
 Every chart type and variant LibreOffice Impress offers in its chart type dialog, with
 PowerPoint's name where it has one, and what DeckCraft does with it: model, drawing, PPTX read,
@@ -61,6 +61,27 @@ Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this wor
 Before this work, an imported chart left unchanged kept its original chart part, so 3-D and other
 unmodelled variants survived a plain open-and-save; any edit lost them. Now the model holds them.
 
+## Data and formatting per type
+
+The Chart Data window (Chart Design ▸ Edit Data, `crates/ui-egui/src/chartdata.rs`) and the
+`chart.grid`, `chart.setCell`, `chart.paste`, row and series commands show each type's data as a
+table (`crates/model/src/chart_data.rs`); the Format pane's Chart Options and the `chart.format.*`
+commands format every type (`crates/model/src/chart_format.rs`).
+
+| Family | Data table | Formatting that applies |
+|---|---|---|
+| Column, bar (2-D and 3-D) | categories, a column per series | fills (gradients), outlines, gap width, overlap (2-D), invert if negative, point colours, data labels with positions, both axes |
+| Line, area | categories, a column per series | lines (width, colour, dash), markers (symbol, size, fill, outline) on the variants with markers, smoothing, area fills, data labels, both axes |
+| Pie, doughnut, pie and bar of pie | categories, a column per series (pies plot the first) | point colours, outlines, first slice angle, explosion by series (the exploded types) or by point, hole size, percentage labels |
+| XY scatter, bubble | X shared or per series, Y per series, bubble sizes | lines and markers per variant, X axis bounds, units, log scale and reversal, both axes' labels and gridlines |
+| Radar | categories, a column per series | lines, markers on the variants with markers, filled shapes, value axis scale and labels |
+| Stock | prices by role (Volume, Open, High, Low, Close as the variant asks) | volume columns' fills, axes, labels; the high-low lines and up-down bars keep their default look |
+| Combo | categories, a column per series, each showing its series type | each series as its type, primary axis formatting; the secondary axis keeps its defaults |
+
+The chart type says whether a line, scatter or radar series shows markers, the series which
+symbol: picking a marker on a type without them turns it into its variant with markers. A pie's
+series explosion is the exploded type's explosion.
+
 ## How it is verified
 
 - `crates/pptx/tests/chart_types.rs`: a deck with one chart per gallery entry is exported, imported
@@ -74,7 +95,13 @@ unmodelled variants survived a plain open-and-save; any edit lost them. Now the 
 - `crates/render/src/chart.rs` tests: every gallery entry draws, variants draw differently, stacked
   areas do not cover each other, odd data never panics.
 - `crates/model` and `crates/engine` tests: presets apply and match one gallery entry, every entry
-  inserts and changes a chart through the commands.
+  inserts and changes a chart through the commands; data edits (cells, rows, series) on stock,
+  radar, scatter, bubble, of-pie, doughnut, 3-D and combo charts keep their formatting; every chart
+  style, palette and quick layout applies to every gallery entry and draws.
+- `crates/pptx/tests/chart_format.rs`: formatting round trips on column, line, pie, bar, stock,
+  radar, scatter, of-pie, exploded doughnut, 3-D column, combo with a secondary axis and bubble
+  charts, with their type and variant; `crates/pptx/tests/chart_workbook.rs`: the workbook follows
+  added and removed series and points on seven types.
 - By hand (2026-10-12): the gallery deck (`deckcraft-cli run … insert.chart`) rendered with
   `deckcraft-cli render` and converted to PDF with LibreOffice 26: LibreOffice opens every chart as
   the same type and variant, 3-D ones in 3-D. The deck saved again as PPTX by LibreOffice reads back
@@ -91,14 +118,18 @@ unmodelled variants survived a plain open-and-save; any edit lost them. Now the 
   and lines are flat. View angles, perspective and depth are kept for the file.
 - Pie of pie and bar of pie: the second plot shows the last points (a third of them by default, or
   the file's split position); split by value, percentage or a custom choice is read as automatic.
-- Explosion is one amount for the whole series; a single pulled-out slice is not modelled (the
-  original part keeps it while the chart is unchanged).
+- Explosion: the exploded types move every slice out by the same amount; single slices moved out
+  are point formatting (`c:dPt/c:explosion`).
 - LibreOffice's "stack series" for radar charts and "sort by X values" for scatter charts are not
   modelled.
-- Gap width, overlap, marker size, colours and axis scaling are formatting, outside this work.
+- Not formatted yet: the secondary value axis (written with its defaults), the high-low lines and
+  up-down bars of stock charts, bubble scale, the pie of pie's connector lines, 3-D walls and floor.
+- Markers are on or off per type: a line chart where only some series show markers reads back
+  without markers.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Data table and formatting per type; verification and limits after the data and formatting work |
 | 2026-10-12 | major | Created: audit of the LibreOffice Impress chart types and variants, all filled in (model, drawing, PPTX read and write, gallery) |
