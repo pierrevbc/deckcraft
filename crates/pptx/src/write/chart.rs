@@ -487,11 +487,12 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType,
         Group::Stock if close && !kind.has_open() => marker(w, "dash", Some(7)),
         Group::Stock => marker(w, "none", None),
         Group::Line | Group::Scatter | Group::Radar => {
-            // The series' own symbol, the type's default, or none for the types without markers.
+            // The type says whether markers show, the series which symbol (the type's default
+            // when it picks none).
             let sym = match s.marker.as_deref() {
+                _ if !kind.markers() => Some("none"),
                 Some(m) if !m.is_empty() && m != "auto" => Some(m),
-                _ if kind.markers() => None,
-                _ => Some("none"),
+                _ => None,
             };
             // Markers without a line: their colour is spelled out, as applications that take a
             // marker's colour from the series line would draw them all alike.
@@ -567,7 +568,8 @@ fn axes(w: &mut W, c: &Chart, g: Group, ids: AxIds, secondary: bool) {
             min: if xy { c.format.cat_axis.min } else { None },
             max: if xy { c.format.cat_axis.max } else { None },
             num_fmt: "General",
-            major_tick: if xy { "out" } else { "none" },
+            // No tick marks unless the axis sets them, as it reads back.
+            major_tick: "none",
             cross_between: xy.then_some("midCat"),
         },
     );

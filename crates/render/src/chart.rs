@@ -65,12 +65,15 @@ fn paint_mark(ctx: &mut dyn Canvas, rctx: &Ctx, own: Option<&Fill>, auto: Rgba, 
     }
 }
 
-/// The marker a series drawn as type `k` shows: its own symbol, a circle when the type shows
-/// markers, or none (`"none"` hides them).
+/// The marker a series drawn as type `k` shows: the type says whether markers show, the series
+/// which symbol (a circle by default; `"none"` hides them).
 fn marker_symbol(k: ChartType, s: &Series) -> Option<&str> {
+    if !k.markers() {
+        return None;
+    }
     match s.marker.as_deref() {
         Some("none") => None,
-        Some("auto" | "") | None => k.markers().then_some("circle"),
+        Some("auto" | "") | None => Some("circle"),
         Some(sym) => Some(sym),
     }
 }
