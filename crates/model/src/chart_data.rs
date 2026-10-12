@@ -189,11 +189,17 @@ pub fn stock_roles_for(kind: ChartType, series: usize) -> &'static [&'static str
     }
 }
 
-/// Point indices of `point_fills` after the points were moved: `map` gives the new index of an
-/// old one (`None` when the point went).
-fn remap_points(fills: &mut Vec<(usize, crate::Fill)>, map: impl Fn(usize) -> Option<usize>) {
+/// Point indices of per-point options (`point_fills`, point explosions) after the points were
+/// moved: `map` gives the new index of an old one (`None` when the point went).
+fn remap_points<T>(fills: &mut Vec<(usize, T)>, map: impl Fn(usize) -> Option<usize>) {
     let old = std::mem::take(fills);
     *fills = old.into_iter().filter_map(|(i, f)| map(i).map(|j| (j, f))).collect();
+}
+
+/// [`remap_points`] on everything a series keeps per point.
+fn remap_series_points(s: &mut crate::chart::Series, map: impl Fn(usize) -> Option<usize>) {
+    remap_points(&mut s.point_fills, &map);
+    remap_points(&mut s.format.point_explosion, &map);
 }
 
 /// `v` with `count` items `fill` inserted at `at` (when `v` reaches that far).
@@ -490,7 +496,7 @@ impl Chart {
             insert_n(&mut s.values, at, count, None);
             insert_n(&mut s.x_values, at, count, None);
             insert_n(&mut s.sizes, at, count, None);
-            remap_points(&mut s.point_fills, |i| Some(if i >= at { i + count } else { i }));
+            remap_series_points(s, |i| Some(if i >= at { i + count } else { i }));
         }
         self.fit_data();
         Ok(())
@@ -509,7 +515,7 @@ impl Chart {
             remove_n(&mut s.values, at, end - at);
             remove_n(&mut s.x_values, at, end - at);
             remove_n(&mut s.sizes, at, end - at);
-            remap_points(&mut s.point_fills, |i| {
+            remap_series_points(s, |i| {
                 if i < at {
                     Some(i)
                 } else if i >= end {
@@ -534,7 +540,7 @@ impl Chart {
             move_item(&mut s.values, from, to);
             move_item(&mut s.x_values, from, to);
             move_item(&mut s.sizes, from, to);
-            remap_points(&mut s.point_fills, |i| Some(moved(i, from, to)));
+            remap_series_points(s, |i| Some(moved(i, from, to)));
         }
         Ok(())
     }
@@ -614,6 +620,7 @@ impl Chart {
                 s.x_values.clear();
                 s.sizes.clear();
                 s.point_fills.clear();
+                s.format.point_explosion.clear();
                 s
             })
             .collect();

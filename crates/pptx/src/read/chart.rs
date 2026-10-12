@@ -301,7 +301,8 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
         if let Some(v) = g.child_val("varyColors") {
             c.vary_colors = v == "1" || v == "true";
         }
-        if let Some(v) = g.child_val("gapWidth").and_then(|v| v.parse::<f64>().ok()) {
+        // The gap of a pie of pie is between its two plots: not the bars' gap width.
+        if let Some(v) = g.child_val("gapWidth").filter(|_| name != "ofPieChart").and_then(|v| v.parse::<f64>().ok()) {
             c.gap_width = (v / 100.0).clamp(0.0, 5.0);
         }
         if let Some(v) = g.child_val("overlap").and_then(|v| v.parse::<f64>().ok()) {
@@ -332,8 +333,9 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
                     ser.point_fills.push((i as usize, f));
                 }
             }
-            if kind.points_only() {
-                // The type says there are no lines: keep only what else the line holds.
+            if kind.points_only() || kind.is_stock() {
+                // The type says there are no lines (stock prices: the group's high-low lines and
+                // up-down bars stand for them): keep only what else the line holds.
                 if let Some(l) = &mut ser.line
                     && l.fill == Some(Fill::None)
                 {
@@ -409,6 +411,14 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
         }
     }
     c.variant.stepped = c.kind.has_lines() && stepped(root);
+    if c.kind.exploded() {
+        // The type's explosion stands for the series that have it.
+        for s in &mut c.series {
+            if s.format.explosion == Some(c.variant.explosion) {
+                s.format.explosion = None;
+            }
+        }
+    }
     if sources.iter().any(|s| s.name_ref.is_some() || s.categories_ref.is_some() || s.values_ref.is_some()) {
         let xy = c.kind.is_xy();
         c.source = Some(ChartSource { xy, categories: c.categories.clone(), series: sources });

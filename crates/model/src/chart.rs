@@ -232,6 +232,19 @@ impl ChartType {
                 | ChartType::RadarPoints
         )
     }
+    /// The variant of this line, scatter or radar type that shows markers (itself when it does),
+    /// `None` for the types without one.
+    pub fn with_markers(self) -> Option<ChartType> {
+        Some(match self {
+            ChartType::Line => ChartType::LineMarkers,
+            ChartType::StackedLine => ChartType::StackedLineMarkers,
+            ChartType::PercentLine => ChartType::PercentLineMarkers,
+            ChartType::ScatterLines => ChartType::ScatterLinesMarkers,
+            ChartType::Radar => ChartType::RadarMarkers,
+            k if k.markers() => k,
+            _ => return None,
+        })
+    }
     /// Line and scatter charts, whose lines can be straight, smooth or stepped.
     pub fn has_lines(self) -> bool {
         self.is_line() || self.is_scatter()
@@ -533,6 +546,10 @@ impl ChartPreset {
         });
         if self.kind.exploded() && c.variant.explosion == 0 {
             c.variant.explosion = 25;
+        }
+        if self.kind.is_pie() && !self.kind.exploded() {
+            // Slices back together: the series' own explosion goes with the type's.
+            c.series.iter_mut().for_each(|s| s.format.explosion = None);
         }
         if self.kind == ChartType::Combo {
             let col = if self.id == "stackedColumnLine" { ChartType::StackedColumn } else { ChartType::Column };

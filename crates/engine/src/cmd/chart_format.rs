@@ -573,8 +573,59 @@ fn series(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = bool_param(p, "secondaryAxis") {
             se.secondary_axis = v;
         }
+        if explosion.is_some() {
+            sync_explosion(c);
+        }
+        if let Some(Some(m)) = &marker
+            && m != "none"
+        {
+            show_markers(c, i);
+        }
         Ok(())
     })
+}
+
+/// A pie or doughnut whose series move out is the exploded type, as a PPTX reads back: the
+/// type's explosion is the largest of its series', and stands for the series that have it.
+fn sync_explosion(c: &mut Chart) {
+    if !c.kind.is_pie() || c.kind.is_of_pie() {
+        return;
+    }
+    let most = c.series.iter().filter_map(|s| s.format.explosion).max().unwrap_or(0);
+    for s in &mut c.series {
+        if s.format.explosion == Some(most) {
+            s.format.explosion = None;
+        }
+    }
+    let doughnut = c.kind.is_doughnut();
+    c.kind = match (doughnut, most > 0) {
+        (false, false) => ChartType::Pie,
+        (false, true) => ChartType::ExplodedPie,
+        (true, false) => ChartType::Doughnut,
+        (true, true) => ChartType::ExplodedDoughnut,
+    };
+    c.variant.explosion = most;
+}
+
+/// Series `i` shows markers: a line, scatter or radar type without them turns into its variant
+/// with markers (the series' own type in a combo chart), as the chart type says whether markers
+/// show and the series which symbol.
+fn show_markers(c: &mut Chart, i: usize) {
+    if c.kind == ChartType::Combo {
+        if let Some(s) = c.series.get_mut(i)
+            && let Some(k) = s.kind.and_then(ChartType::with_markers)
+        {
+            s.kind = Some(k);
+        }
+    } else if let Some(k) = c.kind.with_markers() {
+        c.kind = k;
+    }
+}
+
+/// Series `s` of chart `c` is drawn as a line (its own type in a combo chart).
+fn drawn_as_line(c: &Chart, s: &deckcraft_model::chart::Series) -> bool {
+    let k = if c.kind == ChartType::Combo { s.kind.unwrap_or(ChartType::Column) } else { c.kind };
+    k.has_lines() || (k.is_radar() && k != ChartType::FilledRadar)
 }
 
 fn point(s: &mut Session, p: &Value) -> Result<Value> {
@@ -697,8 +748,8 @@ fn tx(lum_mod: i32, lum_off: i32) -> ColorRef {
 /// Our Chart Styles: formatting presets over a reset chart.
 pub fn apply_style(c: &mut Chart, style: usize) {
     reset_format(c);
-    let line_like = matches!(c.kind, ChartType::Line | ChartType::LineMarkers | ChartType::StackedLine | ChartType::Scatter | ChartType::Radar);
-    let pie = matches!(c.kind, ChartType::Pie | ChartType::Doughnut);
+    let line_like = !c.series.is_empty() && c.series.iter().all(|s| drawn_as_line(c, s));
+    let pie = c.kind.is_pie();
     let n = c.series.len();
     match style {
         // Clean: labels on the bars, no gridlines nor value axis.
@@ -766,13 +817,19 @@ pub fn apply_style(c: &mut Chart, style: usize) {
         }
         // Bold lines and markers.
         8 => {
-            for s in &mut c.series {
-                if line_like {
+            let lines: Vec<bool> = c.series.iter().map(|s| drawn_as_line(c, s)).collect();
+            for (s, line) in c.series.iter_mut().zip(&lines) {
+                if *line {
                     s.line = Some(Line { width: Some(3.5), ..Default::default() });
                     s.marker = Some("circle".into());
                     s.format.marker_size = Some(7);
                 } else {
                     s.line = Some(Line::solid(tx(85_000, 15_000), 0.75));
+                }
+            }
+            for (i, line) in lines.iter().enumerate() {
+                if *line {
+                    show_markers(c, i);
                 }
             }
             c.format.text = ChartText { bold: Some(true), ..Default::default() };
@@ -792,7 +849,7 @@ fn style(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Our Quick Layouts: which elements show and where.
 pub fn apply_layout(c: &mut Chart, layout: usize) {
-    let pie = matches!(c.kind, ChartType::Pie | ChartType::Doughnut);
+    let pie = c.kind.is_pie();
     let t = Some(c_title(c));
     let (title, legend, labels, grid, axis_titles, val_hidden, minor) = match layout {
         1 => (t, Some("r"), false, true, false, false, false),
@@ -962,7 +1019,8 @@ mod tests {
         assert_eq!((c.legend.as_deref(), c.format.legend_overlay), (Some("l"), true));
         assert_eq!(c.series[0].point_fills.len(), 1);
         assert_eq!(c.series[0].format.point_explosion, vec![(2, 20)]);
-        assert_eq!(c.series[0].format.explosion, Some(5));
+        // The series' explosion is the exploded type's.
+        assert_eq!((c.kind.exploded(), c.variant.explosion, c.series[0].format.explosion), (true, 5, None));
         assert_eq!((c.format.first_slice_angle, c.hole_size), (90.0, 0.4));
         s.execute("chart.format.point", &json!({"point": 2, "reset": true})).unwrap();
         let c = chart(&s, id);
@@ -1019,6 +1077,80 @@ mod tests {
         let c = chart(&s, id);
         assert!(c.title.is_none() && c.data_labels && c.axis_titles == (None, None));
         assert!(s.execute("chart.quickLayout", &json!({"layout": 99})).is_err());
+    }
+
+    /// Formatting stays on the new chart types while their data is edited: cells, rows and
+    /// series added, moved and removed keep the chart, series and point formatting.
+    #[test]
+    fn data_edits_on_every_chart_family_keep_the_formatting() {
+        for kind in
+            ["stockOhlc", "stockVohlc", "radarMarkers", "scatterLines", "bubble", "pieOfPie", "explodedDoughnut", "column3d", "columnLineSecondary"]
+        {
+            let (mut s, id) = session_with_chart(kind);
+            s.execute("chart.format.element", &json!({"element": "title", "font": {"size": 20, "bold": true}})).unwrap();
+            s.execute("chart.format.labels", &json!({"show": true, "numFmt": "0.0"})).unwrap();
+            s.execute("chart.format.series", &json!({"series": 0, "fill": "#FF0000", "line": {"color": "#00FF00", "width": 2, "dash": "dash"}}))
+                .unwrap();
+            s.execute("chart.format.point", &json!({"series": 0, "point": 2, "fill": "#0000FF"})).unwrap();
+            let before = chart(&s, id);
+            s.execute("chart.setCell", &json!({"row": 1, "col": 1, "value": "7,5"})).unwrap();
+            s.execute("chart.insertRows", &json!({"at": 0})).unwrap();
+            s.execute("chart.moveRow", &json!({"from": 0, "to": 1})).unwrap();
+            s.execute("chart.insertSeries", &json!({"name": "More"})).unwrap();
+            s.execute("chart.deleteRows", &json!({"at": 1})).unwrap();
+            let last = chart(&s, id).series.len() - 1;
+            s.execute("chart.deleteSeries", &json!({"at": last})).unwrap();
+            let after = chart(&s, id);
+            assert_eq!((after.kind, &after.variant, &after.format), (before.kind, &before.variant, &before.format), "{kind}");
+            let looks =
+                |c: &Chart| c.series.iter().map(|s| (s.fill.clone(), s.line.clone(), s.point_fills.clone(), s.format.clone())).collect::<Vec<_>>();
+            assert_eq!(looks(&after), looks(&before), "{kind}");
+            assert_ne!(after.series[0].values, before.series[0].values, "{kind}: the data changed");
+        }
+    }
+
+    /// Every chart style, palette and quick layout applies to every gallery entry, and the
+    /// result draws.
+    #[test]
+    fn styles_palettes_and_layouts_on_every_gallery_entry_draw() {
+        for p in deckcraft_model::chart::ChartPreset::GALLERY {
+            let (mut s, _) = session_with_chart(p.id);
+            for n in 1..=STYLES {
+                s.execute("chart.style", &json!({"style": n})).unwrap_or_else(|e| panic!("{}: style {n}: {e}", p.id));
+                let _ = deckcraft_render::render_slide(&s.doc().unwrap().doc, 0, &deckcraft_render::RenderOpts { scale: 0.2, ..Default::default() });
+            }
+            for (palette, _) in PALETTES {
+                s.execute("chart.colors", &json!({"palette": palette})).unwrap();
+                let _ = deckcraft_render::render_slide(&s.doc().unwrap().doc, 0, &deckcraft_render::RenderOpts { scale: 0.2, ..Default::default() });
+            }
+            for n in 1..=LAYOUTS {
+                s.execute("chart.quickLayout", &json!({"layout": n})).unwrap();
+            }
+            let _ = deckcraft_render::render_slide(&s.doc().unwrap().doc, 0, &deckcraft_render::RenderOpts { scale: 0.2, ..Default::default() });
+        }
+    }
+
+    /// A marker on a line without markers turns the type into its variant with markers; a pie's
+    /// series explosion makes it an exploded pie, and taking it back a plain one.
+    #[test]
+    fn markers_and_explosion_follow_the_chart_type() {
+        let (mut s, id) = session_with_chart("line");
+        s.execute("chart.format.series", &json!({"series": 1, "marker": "diamond"})).unwrap();
+        let c = chart(&s, id);
+        assert_eq!((c.kind, c.series[1].marker.as_deref()), (ChartType::LineMarkers, Some("diamond")));
+        let (mut s, id) = session_with_chart("columnLine");
+        s.execute("chart.style", &json!({"style": 8})).unwrap();
+        let c = chart(&s, id);
+        assert_eq!((c.kind, c.series.last().and_then(|s| s.kind)), (ChartType::Combo, Some(ChartType::LineMarkers)));
+        let (mut s, id) = session_with_chart("pie");
+        s.execute("chart.format.series", &json!({"series": 0, "explosion": 12})).unwrap();
+        let c = chart(&s, id);
+        assert_eq!((c.kind, c.variant.explosion), (ChartType::ExplodedPie, 12));
+        s.execute("chart.format.series", &json!({"series": 0, "explosion": 0})).unwrap();
+        assert_eq!(chart(&s, id).kind, ChartType::Pie);
+        s.execute("chart.type", &json!({"type": "explodedPie"})).unwrap();
+        s.execute("chart.type", &json!({"type": "pie"})).unwrap();
+        assert!(chart(&s, id).series.iter().all(|s| s.format.explosion.is_none()));
     }
 
     #[test]
