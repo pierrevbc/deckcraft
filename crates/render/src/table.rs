@@ -8,7 +8,9 @@ use deckcraft_model::text::{Anchor, TextBody, TextDir};
 use deckcraft_model::{Presentation, Shape};
 use deckcraft_text::Fields;
 use kurbo::{Affine, BezPath, Rect, Shape as _};
-use vello_cpu::{RenderContext, peniko};
+use vello_cpu::peniko;
+
+use crate::canvas::Canvas;
 
 use crate::color;
 
@@ -300,7 +302,7 @@ pub fn cell_rects(t: &Table, heights: &[f64]) -> Vec<(usize, usize, Rect)> {
 /// Draws the table; returns the box its cells cover (table space), which grows with their text.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
-    ctx: &mut RenderContext,
+    ctx: &mut dyn Canvas,
     pres: &Presentation,
     rctx: &Ctx,
     t: &Table,

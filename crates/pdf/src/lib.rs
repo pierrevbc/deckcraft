@@ -1,19 +1,34 @@
 //! PDF export.
 //!
-//! Each slide is drawn by the DeckCraft renderer at print resolution (so the PDF looks exactly like
-//! the slide, effects included) and overlaid with an invisible layer of real text from the text
-//! layout engine with embedded font subsets, so the text can be searched, selected and copied.
-//! Hyperlinks and shape actions become link annotations, slide titles become bookmarks.
+//! Slides are vector by default: the DeckCraft renderer draws each slide through a krilla-backed
+//! [`Canvas`](deckcraft_render::Canvas) (see `vector.rs`), so shapes, outlines, gradients and
+//! transparency become PDF paths and paints, text is real text in embedded font subsets
+//! (searchable, selectable, sharp at any zoom), and pictures are embedded: an unchanged JPEG or PNG
+//! file as it is, others (GIF, BMP, TIFF, WebP, recoloured or corrected pictures) as lossless
+//! pixels at `dpi`. Only what a PDF can't express is rasterized, element by element at `dpi` and in
+//! place: shapes with shadows, glow, soft edges or reflections (their geometry and effects; their
+//! text stays vector) and pattern fills. Pictures the renderer can't decode (EMF/WMF, SVG) show the
+//! same placeholder as on screen; glyphs of a variable font's non-default instance (a Bold or
+//! Light instance) are outlines over invisible real text, since the font subset is the default
+//! instance.
 //!
-//! Layouts: one slide per page, notes pages (slide above its speaker notes) and handouts (1, 2, 3,
-//! 4, 6 or 9 slides per page).
+//! `vector: false` keeps the earlier mode: each slide one raster image at `dpi`, under an invisible
+//! real-text layer.
+//!
+//! Hyperlinks and shape actions become link annotations, slide titles become bookmarks. Layouts:
+//! one slide per page, notes pages (slide above its speaker notes) and handouts (1, 2, 3, 4, 6 or 9
+//! slides per page).
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
+mod vector;
 
 use std::collections::HashMap;
 
 use deckcraft_fonts::FontDb;
 use deckcraft_model::Presentation;
 use deckcraft_model::text::Action as ClickAction;
-use deckcraft_render::{PlacedText, RenderOpts};
+use deckcraft_render::{Fallback, PlacedText, RenderOpts};
 use krilla::action::{Action, LinkAction};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::destination::XyzDestination;
@@ -23,7 +38,7 @@ use krilla::metadata::Metadata;
 use krilla::num::NormalizedF32;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
-use krilla::paint::Fill;
+use krilla::paint::{Fill, FillRule};
 use krilla::surface::Surface;
 use krilla::text::{Font, GlyphId, KrillaGlyph, TextDirection};
 use kurbo::{Affine, Rect};
@@ -56,12 +71,17 @@ pub enum PageLayout {
 #[serde(default, rename_all = "camelCase")]
 pub struct PdfOptions {
     pub layout: PageLayout,
-    /// Raster resolution of slide artwork (dots per inch).
+    /// Vector slides (paths, real text, embedded pictures). `false`: each slide is one raster
+    /// image at `dpi` under an invisible text layer.
+    pub vector: bool,
+    /// Raster resolution (dots per inch) of slides in raster mode, and of the elements rasterized
+    /// in place in vector mode (effects, patterns).
     pub dpi: f64,
     /// Slide indices to export (0-based); `None` = all.
     pub slides: Option<Vec<usize>>,
     pub include_hidden: bool,
-    /// Invisible real-text layer (search, select, copy).
+    /// Raster mode: invisible real-text layer (search, select, copy). Vector slides always have
+    /// real text.
     pub text_layer: bool,
     /// Thin frame around each slide (notes/handouts).
     pub frame_slides: bool,
@@ -75,6 +95,7 @@ impl Default for PdfOptions {
     fn default() -> Self {
         PdfOptions {
             layout: PageLayout::Slides,
+            vector: true,
             dpi: 200.0,
             slides: None,
             include_hidden: false,
@@ -88,6 +109,12 @@ impl Default for PdfOptions {
 
 /// Export `pres` as PDF bytes.
 pub fn export(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
+    export_with(pres, opts, true)
+}
+
+/// [`export`], with page contents and text maps left uncompressed when `compress` is false (tests
+/// read them).
+fn export_with(pres: &Presentation, opts: &PdfOptions, compress: bool) -> Result<Vec<u8>> {
     let slides: Vec<usize> = match &opts.slides {
         Some(v) => v.iter().copied().filter(|i| *i < pres.slides.len()).collect(),
         None => (0..pres.slides.len()).filter(|i| opts.include_hidden || !pres.slides[*i].hidden).collect(),
@@ -95,7 +122,7 @@ pub fn export(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
     if slides.is_empty() {
         return Err(PdfError::NoPages);
     }
-    let mut pdf = krilla::Document::new();
+    let mut pdf = krilla::Document::new_with(krilla::SerializeSettings { compress_content_streams: compress, ..Default::default() });
     let title = opts.title.clone().unwrap_or_else(|| pres.props.title.clone());
     let mut meta = Metadata::new().creator("DeckCraft".into()).producer("DeckCraft".into());
     if !title.trim().is_empty() {
@@ -107,7 +134,7 @@ pub fn export(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
     pdf.set_metadata(meta);
 
     let (sw, sh) = (pres.slide_size.width.max(1.0), pres.slide_size.height.max(1.0));
-    let mut ex = Exporter { pres, opts, fonts: HashMap::new() };
+    let mut ex = Exporter { pres, opts, cache: vector::Cache::default() };
     // Page plan: per page, the slides on it with their boxes (page points).
     let pages: Vec<Vec<(usize, Rect)>> = match opts.layout {
         PageLayout::Slides => slides.iter().map(|&i| vec![(i, Rect::new(0.0, 0.0, sw, sh))]).collect(),
@@ -211,7 +238,7 @@ pub fn handout_boxes(per_page: u8, paper: (f64, f64), aspect: f64) -> Vec<Rect> 
 struct Exporter<'a> {
     pres: &'a Presentation,
     opts: &'a PdfOptions,
-    fonts: HashMap<u32, Option<Font>>,
+    cache: vector::Cache,
 }
 
 fn tf(a: Affine) -> Transform {
@@ -229,13 +256,37 @@ fn grey(v: u8, opacity: f32) -> Fill {
 
 impl Exporter<'_> {
     fn font(&mut self, face: &deckcraft_fonts::FontFace) -> Option<Font> {
-        self.fonts.entry(face.id()).or_insert_with(|| Font::new(face.data().to_vec().into(), face.index())).clone()
+        self.cache.font(face)
     }
 
     /// Slide `i` drawn into `b` (page points).
     fn slide(&mut self, s: &mut Surface, i: usize, b: Rect) {
+        if self.opts.vector {
+            self.vector_slide(s, i, b);
+        } else {
+            self.raster_slide(s, i, b);
+        }
+        self.frame(s, b);
+    }
+
+    /// Slide `i` as vector artwork and real text, clipped to its box.
+    fn vector_slide(&mut self, s: &mut Surface, i: usize, b: Rect) {
         let pres = self.pres;
-        let (sw, sh) = (pres.slide_size.width.max(1.0), pres.slide_size.height.max(1.0));
+        let k = b.width() / pres.slide_size.width.max(1.0);
+        let view = Affine::translate((b.x0, b.y0)) * Affine::scale(k);
+        let Some(clip) = to_path(&kurbo::Shape::to_path(&b, 0.1)) else { return };
+        s.push_clip_path(&clip, &FillRule::NonZero);
+        let fallback = Fallback { scale: self.opts.dpi.clamp(36.0, 600.0) / 72.0, clip: b };
+        let mut canvas = vector::PdfCanvas::new(s, &mut self.cache, fallback);
+        deckcraft_render::draw_slide(&mut canvas, pres, i, &RenderOpts::default(), view);
+        canvas.finish();
+        s.pop();
+    }
+
+    /// Slide `i` as one raster image, with the invisible text layer when asked.
+    fn raster_slide(&mut self, s: &mut Surface, i: usize, b: Rect) {
+        let pres = self.pres;
+        let sw = pres.slide_size.width.max(1.0);
         let k = b.width() / sw;
         // Raster at the requested dpi relative to the box size on paper.
         let scale = (b.width() / 72.0 * self.opts.dpi.clamp(36.0, 600.0)) / sw;
@@ -257,6 +308,16 @@ impl Exporter<'_> {
                 s.pop();
             }
         }
+        if self.opts.text_layer {
+            let view = Affine::translate((b.x0, b.y0)) * Affine::scale(k);
+            for pt in deckcraft_render::place_slide(pres, i).texts {
+                self.text_layer(s, &pt, view);
+            }
+        }
+    }
+
+    /// Thin frame around a slide on notes and handout pages.
+    fn frame(&self, s: &mut Surface, b: Rect) {
         if self.opts.frame_slides && self.opts.layout != PageLayout::Slides {
             let p = kurbo::Shape::to_path(&b, 0.1);
             if let Some(path) = to_path(&p) {
@@ -269,13 +330,6 @@ impl Exporter<'_> {
                 s.draw_path(&path);
                 s.set_stroke(None);
             }
-        }
-        if self.opts.text_layer {
-            let view = Affine::translate((b.x0, b.y0)) * Affine::scale(k);
-            for pt in deckcraft_render::place_slide(pres, i).texts {
-                self.text_layer(s, &pt, view);
-            }
-            let _ = sh;
         }
     }
 

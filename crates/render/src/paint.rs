@@ -3,16 +3,17 @@
 use deckcraft_color::Rgba;
 use deckcraft_geom::preset::FillMode;
 use deckcraft_model::resolve::Ctx;
-use deckcraft_model::style::{ColorRef, Fill, GradientShape, PictureFill, PictureMode};
+use deckcraft_model::style::{ColorRef, Fill, GradientShape, PictureAdjust, PictureFill, PictureMode};
 use deckcraft_model::{PhType, Presentation};
 use kurbo::{Affine, BezPath, Point, Rect, Shape as _};
-use vello_cpu::{RenderContext, peniko};
+use vello_cpu::peniko;
 
-use crate::{color, images, shade};
+use crate::canvas::{self, Canvas, CanvasImage, Paint};
+use crate::{images, shade};
 
 #[allow(clippy::too_many_arguments)]
 pub fn fill_path(
-    ctx: &mut RenderContext,
+    ctx: &mut dyn Canvas,
     rctx: &Ctx,
     fill: &Fill,
     ph: Option<Rgba>,
@@ -28,50 +29,25 @@ pub fn fill_path(
         Fill::None | Fill::Group | Fill::Background => {}
         Fill::Solid { color: c } => {
             let col = shade(rctx.color(c, ph), mode);
-            ctx.set_paint(color(col, alpha));
+            ctx.set_paint(fade(col, alpha));
             ctx.fill_path(path);
         }
         Fill::Gradient(g) => {
             if g.stops.is_empty() {
                 return;
             }
-            let stops: Vec<(f64, Rgba)> = g.stops.iter().map(|s| (s.pos, shade(rctx.color(&s.color, ph), mode))).collect();
-            ctx.set_paint(gradient(&g.shape, stops, bounds, alpha));
-
             let mut stops: Vec<(f64, Rgba)> = g.stops.iter().map(|s| (s.pos.clamp(0.0, 1.0), shade(rctx.color(&s.color, ph), mode))).collect();
             stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-            // Rectangle and outline paths: rasterised (see `pathgrad`).
+            // Rectangle and outline paths: rasterised (see `pathgrad`), on vector canvases too.
             if let GradientShape::Path { path: kind, focus } = &g.shape
                 && matches!(kind.as_str(), "rect" | "shape")
             {
-                crate::pathgrad::fill(ctx, kind, *focus, &crate::ramp::expand(&stops), bounds, path, m, alpha);
+                let ramp = crate::ramp::expand(&stops);
+                let area = m.transform_rect_bbox(path.bounding_box());
+                canvas::pixels(ctx, area, &mut |v, pre| crate::pathgrad::fill(v, kind, *focus, &ramp, bounds, path, pre * m, alpha));
                 return;
             }
-            // PowerPoint's ramp between stops (linear light, S-shaped), see `ramp`.
-            let stops: Vec<peniko::ColorStop> =
-                crate::ramp::expand(&stops).into_iter().map(|(o, c)| peniko::ColorStop { offset: o as f32, color: color(c, alpha).into() }).collect();
-            let grad = match &g.shape {
-                GradientShape::Linear { angle, .. } => {
-                    // Angle measured clockwise from left→right; span the bounds along that direction.
-                    let a = angle.to_radians();
-                    let (dx, dy) = (a.cos(), a.sin());
-                    let c = bounds.center();
-                    let half = (bounds.width() * dx.abs() + bounds.height() * dy.abs()) / 2.0;
-                    peniko::Gradient::new_linear(Point::new(c.x - dx * half, c.y - dy * half), Point::new(c.x + dx * half, c.y + dy * half))
-                        .with_stops(stops.as_slice())
-                }
-                GradientShape::Path { focus, .. } => {
-                    let fx = bounds.x0 + bounds.width() * (focus[0] + (1.0 - focus[2])) / 2.0;
-                    let fy = bounds.y0 + bounds.height() * (focus[1] + (1.0 - focus[3])) / 2.0;
-                    // Reach the farthest corner, so a gradient from a corner covers the whole box.
-                    let r = [(bounds.x0, bounds.y0), (bounds.x1, bounds.y0), (bounds.x0, bounds.y1), (bounds.x1, bounds.y1)]
-                        .iter()
-                        .map(|(x, y)| ((x - fx).powi(2) + (y - fy).powi(2)).sqrt())
-                        .fold(1e-6, f64::max);
-                    peniko::Gradient::new_radial(Point::new(fx, fy), r as f32).with_stops(stops.as_slice())
-                }
-            };
-            ctx.set_paint(grad);
+            ctx.set_paint(gradient(&g.shape, stops, bounds, alpha));
             ctx.fill_path(path);
         }
         Fill::Picture(pf) => {
@@ -82,7 +58,9 @@ pub fn fill_path(
         Fill::Pattern(p) => {
             let fg = rctx.color(&p.fg, ph);
             let bg = rctx.color(&p.bg, ph);
-            crate::pattern::fill(ctx, &p.preset, fg, bg, alpha, path, m);
+            // Pixels (an 8 x 8 tile); vector canvases get this path's area rasterized.
+            let area = m.transform_rect_bbox(path.bounding_box());
+            canvas::pixels(ctx, area, &mut |v, pre| crate::pattern::fill(v, &p.preset, fg, bg, alpha, path, pre * m));
         }
     }
 }
@@ -97,15 +75,19 @@ pub fn resolved<'a>(rctx: &Ctx, pf: &'a PictureFill, ph: Option<Rgba>) -> std::b
     std::borrow::Cow::Owned(out)
 }
 
+/// `c` with its alpha multiplied by `alpha`.
+pub(crate) fn fade(c: Rgba, alpha: f64) -> Rgba {
+    c.with_alpha((c.a as f64 * alpha.clamp(0.0, 1.0)).round().clamp(0.0, 255.0) as u8)
+}
+
 /// The paint of a gradient of `shape` with `stops` (position, colour) spanning `bounds`, faded
 /// by `alpha`, ramping between stops as PowerPoint does (see `ramp`).
-pub fn gradient(shape: &GradientShape, mut stops: Vec<(f64, Rgba)>, bounds: Rect, alpha: f64) -> peniko::Gradient {
+pub fn gradient(shape: &GradientShape, mut stops: Vec<(f64, Rgba)>, bounds: Rect, alpha: f64) -> Paint {
     for s in &mut stops {
         s.0 = s.0.clamp(0.0, 1.0);
     }
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let stops: Vec<peniko::ColorStop> =
-        crate::ramp::expand(&stops).into_iter().map(|(o, c)| peniko::ColorStop { offset: o as f32, color: color(c, alpha).into() }).collect();
+    let stops: Vec<(f32, Rgba)> = crate::ramp::expand(&stops).into_iter().map(|(o, c)| (o as f32, fade(c, alpha))).collect();
     match shape {
         GradientShape::Linear { angle, .. } => {
             // Angle measured clockwise from left→right; span the bounds along that direction.
@@ -113,8 +95,7 @@ pub fn gradient(shape: &GradientShape, mut stops: Vec<(f64, Rgba)>, bounds: Rect
             let (dx, dy) = (a.cos(), a.sin());
             let c = bounds.center();
             let half = (bounds.width() * dx.abs() + bounds.height() * dy.abs()) / 2.0;
-            peniko::Gradient::new_linear(Point::new(c.x - dx * half, c.y - dy * half), Point::new(c.x + dx * half, c.y + dy * half))
-                .with_stops(stops.as_slice())
+            Paint::Linear { start: Point::new(c.x - dx * half, c.y - dy * half), end: Point::new(c.x + dx * half, c.y + dy * half), stops }
         }
         GradientShape::Path { focus, .. } => {
             let fx = bounds.x0 + bounds.width() * (focus[0] + (1.0 - focus[2])) / 2.0;
@@ -124,26 +105,40 @@ pub fn gradient(shape: &GradientShape, mut stops: Vec<(f64, Rgba)>, bounds: Rect
                 .iter()
                 .map(|(x, y)| ((x - fx).powi(2) + (y - fy).powi(2)).sqrt())
                 .fold(1e-6, f64::max);
-            peniko::Gradient::new_radial(Point::new(fx, fy), r as f32).with_stops(stops.as_slice())
+            Paint::Radial { center: Point::new(fx, fy), radius: r, stops }
         }
     }
 }
 
 /// Draw a picture fill into `bounds` (shape-local) honouring crop and stretch/tile modes; an animated
 /// GIF shows its frame at `gif_time` seconds.
-pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, bounds: Rect, m: Affine, gif_time: Option<f64>) {
+pub fn picture(ctx: &mut dyn Canvas, pres: &Presentation, pf: &PictureFill, bounds: Rect, m: Affine, gif_time: Option<f64>) {
     let Some(item) = pres.media(pf.media) else {
         missing(ctx, bounds);
         return;
     };
-    let px_scale = crate::scale_of(m);
-    let want = (bounds.width().max(bounds.height()) * px_scale).max(1.0);
-    let frame = gif_time.and_then(|t| images::gif_pixmap(&item.data, &pf.adjust, t));
-    let Some(pm) = frame.or_else(|| images::decode_for(&item.data, want, &pf.adjust)) else {
-        missing(ctx, bounds);
-        return;
+    let fallback = ctx.fallback();
+    // Vector canvases embed an unchanged JPEG or PNG file as it is.
+    let encoded = fallback
+        .filter(|_| gif_time.is_none() && pf.adjust == PictureAdjust::default())
+        .and_then(|_| images::encoded_size(&item.data))
+        .map(|(w, h)| CanvasImage { width: w as f64, height: h as f64, pixmap: None, encoded: Some(&item.data) });
+    let image = match encoded {
+        Some(img) => img,
+        None => {
+            // Pixels at the canvas's resolution (print resolution on vector canvases); metafiles
+            // (WMF, EMF) are drawn to pixels at that size too.
+            let px_scale = crate::scale_of(m) * fallback.map_or(1.0, |f| f.scale);
+            let want = (bounds.width().max(bounds.height()) * px_scale).max(1.0);
+            let frame = gif_time.and_then(|t| images::gif_pixmap(&item.data, &pf.adjust, t));
+            let Some(pm) = frame.or_else(|| images::decode_for(&item.data, want, &pf.adjust)) else {
+                missing(ctx, bounds);
+                return;
+            };
+            CanvasImage { width: pm.width() as f64, height: pm.height() as f64, pixmap: Some(pm), encoded: None }
+        }
     };
-    let (iw, ih) = (pm.width() as f64, pm.height() as f64);
+    let (iw, ih) = (image.width, image.height);
     if iw < 1.0 || ih < 1.0 {
         return;
     }
@@ -161,10 +156,6 @@ pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, b
         PictureMode::Tile { .. } => bounds,
     };
     let alpha = pf.alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-    let image = vello_cpu::Image {
-        image: vello_cpu::ImageSource::Pixmap(pm.clone()),
-        sampler: peniko::ImageSampler { quality: peniko::ImageQuality::High, ..Default::default() },
-    };
     if let PictureMode::Tile { sx, sy, tx, ty, .. } = &pf.mode {
         let (sx, sy) = (if *sx > 0.0 { *sx } else { 1.0 }, if *sy > 0.0 { *sy } else { 1.0 });
         let tile_w = iw * 0.75 * sx;
@@ -183,20 +174,13 @@ pub fn picture(ctx: &mut RenderContext, pres: &Presentation, pf: &PictureFill, b
     draw_image(ctx, &image, iw, ih, dest, m, alpha);
 }
 
-fn draw_image(ctx: &mut RenderContext, image: &vello_cpu::Image, iw: f64, ih: f64, dest: Rect, m: Affine, alpha: f64) {
+fn draw_image(ctx: &mut dyn Canvas, image: &CanvasImage, iw: f64, ih: f64, dest: Rect, m: Affine, alpha: f64) {
     let t = m * Affine::translate(dest.origin().to_vec2()) * Affine::scale_non_uniform(dest.width() / iw, dest.height() / ih);
     ctx.set_transform(t);
-    if alpha < 0.999 {
-        ctx.push_layer(None, None, Some(alpha as f32), None, None);
-    }
-    ctx.set_paint(image.clone());
-    ctx.fill_rect(&Rect::new(0.0, 0.0, iw, ih));
-    if alpha < 0.999 {
-        ctx.pop_layer();
-    }
+    ctx.draw_image(image, alpha);
 }
 
-fn missing(ctx: &mut RenderContext, b: Rect) {
+fn missing(ctx: &mut dyn Canvas, b: Rect) {
     ctx.set_paint(peniko::Color::from_rgba8(230, 230, 230, 255));
     ctx.fill_rect(&b);
     ctx.set_paint(peniko::Color::from_rgba8(160, 160, 160, 255));
@@ -210,7 +194,7 @@ fn missing(ctx: &mut RenderContext, b: Rect) {
 }
 
 /// The speaker / film glyph on audio and video objects without a poster.
-pub fn media_glyph(ctx: &mut RenderContext, video: bool, b: Rect) {
+pub fn media_glyph(ctx: &mut dyn Canvas, video: bool, b: Rect) {
     let s = b.width().min(b.height());
     let c = b.center();
     if video {
@@ -247,7 +231,7 @@ pub fn media_glyph(ctx: &mut RenderContext, video: bool, b: Rect) {
 }
 
 /// A content-type icon drawn in empty picture/chart/table placeholders.
-pub fn placeholder_icon(ctx: &mut RenderContext, kind: PhType, b: Rect) {
+pub fn placeholder_icon(ctx: &mut dyn Canvas, kind: PhType, b: Rect) {
     let s = (b.width().min(b.height()) * 0.18).clamp(10.0, 48.0);
     let c = Point::new(b.center().x, b.center().y - s * 0.3);
     let r = Rect::new(c.x - s / 2.0, c.y - s / 2.0, c.x + s / 2.0, c.y + s / 2.0);
