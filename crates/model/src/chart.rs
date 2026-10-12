@@ -826,7 +826,6 @@ impl Chart {
         crate::numfmt::format(code.map_or("General", String::as_str), v, self.lang.as_deref())
     }
 
-
     /// Five trading days of our own made-up prices, in the series order of `kind`: volume (when
     /// it has one), open (when it has one), high, low, close.
     fn sample_stock(kind: ChartType) -> Self {
