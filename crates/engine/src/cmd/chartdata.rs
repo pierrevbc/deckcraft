@@ -150,6 +150,16 @@ pub(crate) fn numbers(v: Option<&Value>) -> Option<Vec<Option<f64>>> {
     )
 }
 
+/// The series of a stock chart given by role (`volume`, `open`, `high`, `low`, `close`: arrays of
+/// numbers), in the order stock charts take them: volume, open, high, low, close. `None` when no
+/// role is given.
+pub(crate) fn stock_series(p: &Value) -> Option<Vec<Value>> {
+    let roles = [("volume", "Volume"), ("open", "Open"), ("high", "High"), ("low", "Low"), ("close", "Close")];
+    let list: Vec<Value> =
+        roles.iter().filter_map(|(key, name)| p.get(*key).filter(|v| v.is_array()).map(|v| json!({"name": name, "values": v}))).collect();
+    (!list.is_empty()).then_some(list)
+}
+
 /// A series of `chart.data` / `insert.chart` params: `{name, values, xValues?, sizes?}` over the
 /// series `base` it replaces (formatting and data it doesn't give are kept).
 pub(crate) fn series_from(v: &Value, base: Option<Series>) -> Series {
@@ -384,6 +394,20 @@ mod tests {
         assert_eq!(c.series[0].values, vec![Some(1.5), Some(2.0), None]);
         assert_eq!(c.series[0].x_values, vec![Some(10.0), Some(20.0), Some(30.0)]);
         assert_eq!(c.series[0].sizes, vec![Some(1.0), Some(2.0), Some(3.0)]);
+    }
+
+    #[test]
+    fn stock_data_by_role() {
+        let mut s = Session::with_new();
+        let p = json!({"type": "stock", "categories": ["Mon", "Tue"], "volume": [120, 90], "open": [44, 46], "high": [47, "48,5"], "low": [43, 45], "close": [46, 45]});
+        let id = s.execute("insert.chart", &p).unwrap()["id"].as_u64().unwrap();
+        let c = chart(&s, id);
+        assert_eq!(c.series.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["Volume", "Open", "High", "Low", "Close"]);
+        assert_eq!(c.series[2].values, vec![Some(47.0), Some(48.5)]);
+        s.execute("chart.data", &json!({"id": id, "high": [50, 51], "low": [40, 41], "close": [45, 46]})).unwrap();
+        let c = chart(&s, id);
+        assert_eq!(c.series.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["High", "Low", "Close"]);
+        assert_eq!(c.series[0].values, vec![Some(50.0), Some(51.0)]);
     }
 
     #[test]
