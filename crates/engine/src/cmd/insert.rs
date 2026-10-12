@@ -68,15 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             chart_data
         ),
-        cmd!(
-            "chart.title",
-            "Chart Title",
-            ["Chart Design", "Chart Layouts"],
-            None,
-            "{title: string|null, id?}",
-            has_selection,
-            chart_title_cmd
-        ),
+        cmd!("chart.title", "Chart Title", ["Chart Design", "Chart Layouts"], None, "{title: string|null, id?}", has_selection, chart_title_cmd),
         cmd!(
             "chart.options",
             "Chart Elements",
@@ -86,15 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             chart_options
         ),
-        cmd!(
-            "chart.gridcraft",
-            "Edit in GridCraft",
-            ["Chart Design", "Data"],
-            None,
-            "{id?, path?: string}",
-            has_selection,
-            chart_gridcraft_cmd
-        ),
+        cmd!("chart.gridcraft", "Edit in GridCraft", ["Chart Design", "Data"], None, "{id?, path?: string}", has_selection, chart_gridcraft_cmd),
         cmd!(
             "insert.smartArt",
             "SmartArt",
