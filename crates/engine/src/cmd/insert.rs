@@ -733,6 +733,10 @@ fn chart_title_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn chart_gridcraft_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    // No file system or processes on the web (`temp_dir` would panic there).
+    if cfg!(target_arch = "wasm32") {
+        return Err(bad("chart.gridcraft", "not available in the web app"));
+    }
     let st = s.doc()?;
     let target_id = p.get("id").and_then(Value::as_u64).map(|v| ShapeId(v as u32));
     let shape = match target_id {
