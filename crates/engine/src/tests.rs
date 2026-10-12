@@ -1092,7 +1092,7 @@ fn chart_first_five_types_and_gridcraft_flow() {
     // 1. Test inserting each of the first five chart types from Image #3
     for kind in ["column", "bar", "line", "area", "pie"] {
         s.ui_requests.clear();
-        let r = s.execute("insert.chart", &json!({"type": kind})).unwrap();
+        let r = s.execute("insert.chart", &json!({"type": kind, "editData": true})).unwrap();
         let id = r["id"].as_u64().unwrap();
         assert!(id > 0);
 
@@ -1106,6 +1106,11 @@ fn chart_first_five_types_and_gridcraft_flow() {
         let sh = st.shape(deckcraft_model::ShapeId(id as u32)).unwrap();
         assert!(matches!(sh.kind, deckcraft_model::ShapeKind::Chart(_)), "should be a chart shape for {kind}");
     }
+
+    // A programmatic insert opens no dialog.
+    s.ui_requests.clear();
+    s.execute("insert.chart", &json!({"type": "column"})).unwrap();
+    assert!(s.ui_requests.is_empty(), "insert.chart without editData opens nothing");
 
     // 2. Test chart.title command
     let chart_id = s.doc().unwrap().current_slide().unwrap().shapes.last().unwrap().id.0;
