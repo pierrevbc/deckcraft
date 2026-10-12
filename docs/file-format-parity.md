@@ -72,6 +72,7 @@ the round trip even though DeckCraft doesn't model it.
 | Text warp (`prstTxWarp`) | yes | yes | All 40 presets rendered (`crates/geom/src/warp.rs`); adjust values (`avLst`) round-trip |
 | Pictures with crop, recolour, duotone, alpha, luminance | yes | yes | |
 | Tables with styles | yes | yes | |
+| Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md); the embedded workbook is kept, updated cell by cell when the data changes (ranges and the table over them follow added or removed series and points), generated otherwise |
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md) |
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; the embedded workbook is kept, its changed cells updated in place, or generated from the chart data for new charts |
 | Charts (`cx:` chartex: waterfall, funnel, treemap, sunburst, histogram, box) | no | no | |
@@ -101,6 +102,7 @@ the round trip even though DeckCraft doesn't model it.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-12 | minor | Chart parts: every chart type and variant read and written ([chart-type-parity.md](chart-type-parity.md)) |
+| 2026-10-12 | minor | Charts: embedded workbook kept and updated in place |
 | 2026-10-12 | minor | PDF export draws slides as vectors and real text through the renderer's canvas; effects and patterns rasterize per element |
 | 2026-10-12 | minor | SmartArt import lays each shape's text out on its `dsp:txXfrm` text rectangle instead of the shape box |
 | 2026-10-12 | minor | Chart workbooks survive PPTX export: kept byte for byte, changed cells updated in place, or generated for new charts |
