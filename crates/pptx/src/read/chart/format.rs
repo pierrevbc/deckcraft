@@ -129,6 +129,8 @@ pub(super) fn axis_of(a: &El) -> AxisFormat {
     let grid = |name: &str| a.child(name);
     AxisFormat {
         hidden: flag(a.child("delete")).unwrap_or(false),
+        min: num(sc.and_then(|s| s.child("min"))),
+        max: num(sc.and_then(|s| s.child("max"))),
         reverse: sc.and_then(|s| s.child_val("orientation")) == Some("maxMin"),
         log_base: num(sc.and_then(|s| s.child("logBase"))).map(|b| b.clamp(2.0, 1000.0)),
         major_unit: num(a.child("majorUnit")).filter(|v| *v > 0.0),
@@ -177,8 +179,9 @@ pub(super) fn read_format(root: &El, ch: &El, pa: &El, c: &mut Chart, val_ax: Op
     }
     if let Some(a) = val_ax {
         f.val_axis = axis_of(a);
-        // The value axis' major gridlines are `Chart::gridlines`.
+        // The value axis' major gridlines and bounds are `Chart::gridlines`, `y_min`, `y_max`.
         f.val_axis.major_gridlines = false;
+        (f.val_axis.min, f.val_axis.max) = (None, None);
     }
     if let Some(a) = cat_ax {
         f.cat_axis = axis_of(a);

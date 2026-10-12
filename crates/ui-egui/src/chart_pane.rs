@@ -504,10 +504,18 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
     if ui.checkbox(&mut visible, "Show axis").changed() {
         run(app, "chart.format.axis", e(json!({"visible": visible})));
     }
-    if value {
-        let (lo, hi) = c.value_range();
+    let xy = c.kind.is_xy();
+    if value || xy {
+        let (lo, hi) = if value {
+            c.value_range()
+        } else {
+            let xs = c.series.iter().flat_map(|s| s.x_values.iter().flatten().copied());
+            let (l, h) = xs.fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(v), h.max(v)));
+            if l <= h { (l, h) } else { (0.0, 1.0) }
+        };
         let (nmin, nmax, nstep) = deckcraft_model::chart::nice_scale(lo.min(0.0), hi);
-        for (label, key, cur, auto) in [("Minimum", "min", c.y_min, nmin), ("Maximum", "max", c.y_max, nmax)] {
+        let bounds = if value { (c.y_min, c.y_max) } else { (a.min, a.max) };
+        for (label, key, cur, auto) in [("Minimum", "min", bounds.0, nmin), ("Maximum", "max", bounds.1, nmax)] {
             ui.horizontal(|ui| {
                 ui.add_sized(vec2(70.0, 20.0), egui::Label::new(label));
                 if let Some(nv) = widgets::spinner(ui, &format!("ax-{key}"), cur.unwrap_or(auto), nstep.max(0.01), "", 70.0) {
@@ -538,16 +546,18 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
             });
         }
         let mut log = a.log_base.is_some();
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut log, "Logarithmic scale").changed() {
-                run(app, "chart.format.axis", e(json!({"logBase": if log { json!(10) } else { Value::Null }})));
-            }
-            if let Some(b) = a.log_base
-                && let Some(nv) = widgets::spinner(ui, "ax-log", b, 1.0, "", 50.0)
-            {
-                run(app, "chart.format.axis", e(json!({"logBase": nv.clamp(2.0, 1000.0)})));
-            }
-        });
+        if value {
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut log, "Logarithmic scale").changed() {
+                    run(app, "chart.format.axis", e(json!({"logBase": if log { json!(10) } else { Value::Null }})));
+                }
+                if let Some(b) = a.log_base
+                    && let Some(nv) = widgets::spinner(ui, "ax-log", b, 1.0, "", 50.0)
+                {
+                    run(app, "chart.format.axis", e(json!({"logBase": nv.clamp(2.0, 1000.0)})));
+                }
+            });
+        }
     }
     let mut rev = a.reverse;
     if ui.checkbox(&mut rev, if value { "Values in reverse order" } else { "Categories in reverse order" }).changed() {
