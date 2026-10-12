@@ -509,6 +509,23 @@ pub fn draw(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f
             for q in &pts {
                 ctx.fill_path(&kurbo::Circle::new(*q, 3.5).to_path(0.1));
             }
+            if c.data_labels {
+                for (i, q) in pts.iter().enumerate() {
+                    let v = s.values.get(i).copied().flatten().unwrap_or(0.0);
+                    label(
+                        ctx,
+                        rctx,
+                        m,
+                        &fmt_num(v),
+                        Rect::new(q.x - 25.0, q.y - base * 1.4, q.x + 25.0, q.y),
+                        base * 0.85,
+                        Align::Center,
+                        Anchor::Bottom,
+                        text_col,
+                        false,
+                    );
+                }
+            }
         }
     }
     // Axis line.

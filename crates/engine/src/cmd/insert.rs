@@ -64,9 +64,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Data",
             ["Chart Design", "Data"],
             None,
-            "{categories?: [..], series?: [{name, values}], id?}",
+            "{categories?: [..], series?: [{name, values}], title?: string, id?}",
             has_selection,
             chart_data
+        ),
+        cmd!(
+            "chart.title",
+            "Chart Title",
+            ["Chart Design", "Chart Layouts"],
+            None,
+            "{title: string|null, id?}",
+            has_selection,
+            chart_title_cmd
         ),
         cmd!(
             "chart.options",
@@ -76,6 +85,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{title?: string|null, legend?: b|t|l|r|null, dataLabels?: bool, gridlines?: bool, palette?, id?}",
             has_selection,
             chart_options
+        ),
+        cmd!(
+            "chart.gridcraft",
+            "Edit in GridCraft",
+            ["Chart Design", "Data"],
+            None,
+            "{id?, path?: string}",
+            has_selection,
+            chart_gridcraft_cmd
         ),
         cmd!(
             "insert.smartArt",
@@ -447,6 +465,7 @@ fn chart(s: &mut Session, p: &Value) -> Result<Value> {
     let size = s.doc()?.doc.slide_size;
     let rect = rect_param(p, "rect").unwrap_or(Xfrm::new(size.width * 0.15, size.height * 0.15, size.width * 0.7, size.height * 0.7));
     let id = add_shape(s, Shape { xfrm: Some(rect), kind: ShapeKind::Chart(Box::new(c)), ..Default::default() }, true)?;
+    s.ui_requests.push(crate::UiRequest::Dialog { id: "chartData".into(), params: json!({"id": id}) });
     Ok(json!({"id": id}))
 }
 
@@ -665,6 +684,9 @@ fn chart_data(s: &mut Session, p: &Value) -> Result<Value> {
             .collect()
     });
     with_chart(s, p, "chart.data", |c| {
+        if let Some(t) = p.get("title").and_then(Value::as_str) {
+            c.title = Some(t.to_string());
+        }
         if let Some(cs) = &cats {
             c.categories = cs.clone();
         }
@@ -707,6 +729,49 @@ fn chart_options(s: &mut Session, p: &Value) -> Result<Value> {
         c.raw = None;
         Ok(())
     })
+}
+
+fn chart_title_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    with_chart(s, p, "chart.title", |c| {
+        c.title = p.get("title").and_then(Value::as_str).map(String::from);
+        c.raw = None;
+        Ok(())
+    })
+}
+
+fn chart_gridcraft_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let st = s.doc()?;
+    let target_id = p.get("id").and_then(Value::as_u64).map(|v| ShapeId(v as u32));
+    let shape = match target_id {
+        Some(tid) => st.shape(tid),
+        None => st.selected_shapes().into_iter().find(|sh| matches!(sh.kind, ShapeKind::Chart(_))),
+    };
+    let Some(Shape { kind: ShapeKind::Chart(c), .. }) = shape else {
+        return Err(bad("chart.gridcraft", "not a chart"));
+    };
+    let csv_data = c.to_csv();
+    let title = c.title.clone().unwrap_or_else(|| "Chart".into());
+    let clean_title: String = title.chars().map(|ch| if ch.is_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' }).collect();
+    let path = match str_param(p, "path") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::temp_dir().join(format!("deckcraft_chart_{clean_title}.csv")),
+    };
+    std::fs::write(&path, &csv_data).map_err(|e| bad("chart.gridcraft", format!("{}: {e}", path.display())))?;
+    let path_str = path.to_string_lossy().to_string();
+
+    let gridcraft_dir = std::path::Path::new(r"C:\Users\parra\gridcraft");
+    let spawned = if p.get("path").is_none() && gridcraft_dir.join("Cargo.toml").exists() {
+        std::process::Command::new("cargo")
+            .args(["run", "--manifest-path", &gridcraft_dir.join("Cargo.toml").to_string_lossy(), "-p", "gridcraft", "--", &path_str])
+            .spawn()
+            .is_ok()
+    } else if p.get("path").is_none() {
+        std::process::Command::new("gridcraft").arg(&path_str).spawn().is_ok()
+    } else {
+        false
+    };
+
+    Ok(json!({"path": path_str, "spawned": spawned}))
 }
 
 /// SmartArt-style graphics built from shapes (grouped), with our own layouts.
