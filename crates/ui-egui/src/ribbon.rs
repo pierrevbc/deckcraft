@@ -127,6 +127,7 @@ fn contextual(app: &SlideApp) -> Vec<&'static str> {
     }
     if shapes.iter().any(|s| matches!(s.kind, ShapeKind::Chart(_))) {
         v.push("Chart Design");
+        v.push("Chart Format");
     }
     if shapes.iter().any(|s| matches!(s.kind, ShapeKind::Media(_))) {
         v.push("Playback");
@@ -223,6 +224,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
             "Table Design" => table_design(app, ui),
             "Layout" => table_layout(app, ui),
             "Chart Design" => chart_design(app, ui),
+            "Chart Format" => crate::chart_pane::format_tab(app, ui),
             "Playback" => playback(app, ui),
             "Slide Master" => slide_master(app, ui),
             _ => {}
@@ -2303,7 +2305,7 @@ fn table_layout(app: &mut SlideApp, ui: &mut Ui) {
 
 /// The chart type gallery: a submenu per family (Column, Bar, Pie…) listing its types and
 /// variants, the current one checked. Returns the one picked.
-fn chart_gallery(ui: &mut Ui, current: Option<&deckcraft_model::Chart>) -> Option<&'static deckcraft_model::chart::ChartPreset> {
+pub(crate) fn chart_gallery(ui: &mut Ui, current: Option<&deckcraft_model::Chart>) -> Option<&'static deckcraft_model::chart::ChartPreset> {
     use deckcraft_model::chart::ChartPreset;
     let mut picked = None;
     for family in ChartPreset::FAMILIES {
@@ -2362,6 +2364,7 @@ fn chart_design(app: &mut SlideApp, ui: &mut Ui) {
             });
         });
     }
+    crate::chart_pane::design_groups(app, ui);
     arrange_group(app, ui);
 }
 
