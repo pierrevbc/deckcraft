@@ -1,6 +1,6 @@
 # Where DeckCraft falls short of PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (vector PDF export landed, gap closed; previous: minor, 3-D bevel, camera and face lighting rendered; previous: minor, IME composition and CJK interface text landed, #101; previous: minor, core-workflow alpha gate added; stage stays alpha; before that: major, first itemized gap list; full re-measure against PowerPoint for Mac 16.113.4 and the open GitHub issues) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (charts: every LibreOffice chart type and variant landed; previous: minor, vector PDF export landed, gap closed; previous: minor, 3-D bevel, camera and face lighting rendered; previous: minor, IME composition and CJK interface text landed, #101; previous: minor, core-workflow alpha gate added; stage stays alpha; before that: major, first itemized gap list; full re-measure against PowerPoint for Mac 16.113.4 and the open GitHub issues) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every known shortfall, one entry each, ranked by how much it stops someone who presents with
 PowerPoint from switching. This is the work list: pick from the top. Numbers are summarized in
@@ -138,6 +138,7 @@ Detail in [file-format-parity.md](file-format-parity.md).
 
 ### Charts: data grid, elements and the newer chart types
 - **Status (2026-10-11):** Data grid editing via interactive GridCraft spreadsheet window landed; live sync, CSV exchange, chart elements (title, legend, labels, gridlines), and primary chart types (Clustered Column, Clustered Bar, Line, Area, Pie) completed. `chartex` parts remain open.
+- **Status (2026-10-12):** every LibreOffice Impress chart type and variant (stacked and 100%, points only, smooth and stepped lines, exploded pies, pie and bar of pie, scatter and radar variants, bubbles, the four stock charts, column-line combos with a secondary axis, 3-D charts) is modelled, drawn, read and written, and in the gallery; see [chart-type-parity.md](chart-type-parity.md). Left: a real 3-D renderer (3-D charts get a simple depth), and the `chartex` parts.
 - **Evidence:** checklist rows "Edit chart data" (P0, Done), "Chart elements" (P1, Done), "Other chart types" (partial); `chartex` parts (waterfall, funnel, treemap, sunburst, histogram, box & whisker) aren't read.
 - **Impact:** most business decks have charts; editing their data is now supported directly with live sync.
 - **Estimate:** 6–10 h remaining for `chartex` parts. Data and elements are no longer blocking.
@@ -250,6 +251,7 @@ Detail in [localization-parity.md](localization-parity.md).
 |---|---|---|
 | 2026-10-13 | minor | Shape, picture and table rendering checked against PowerPoint on ~150 synthetic edge-case slides; 3-D bevels, cameras and face lighting now render approximately (gap narrowed to extrusion, rigs and the 3-D pane) |
 | 2026-10-12 | minor | Closed "PDF export rasterizes slide artwork": slides export as vector paths, real text and embedded pictures; only blur effects and patterns rasterize, per element |
+| 2026-10-12 | minor | Charts: every LibreOffice chart type and variant landed ([chart-type-parity.md](chart-type-parity.md)) |
 | 2026-10-12 | minor | IME composition in slide text and notes, and CJK interface text with real glyphs (#101): the IME gap is now Korean on the web and table-cell underlines |
 | 2026-10-12 | minor | EMF/WMF text, pattern and hatch brushes drawn; legacy OLE and ActiveX previews shown; the SVG gap keeps only EMF clip regions |
 | 2026-10-12 | minor | Text warps render (all 40 presets, adjusts round-trip); the warp gap is now the gallery, command and handles |

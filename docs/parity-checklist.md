@@ -4,12 +4,15 @@
 
 The summary between `<!-- SUMMARY -->
 **Weighted breadth parity: 80%** over 191 features.
+**Weighted breadth parity: 80%** over 192 features.
 
 | Priority | Features | Done | Partial | Missing | Parity |
 |---|---|---|---|---|---|
 | P0 | 72 | 62 | 10 | 0 | 93% |
 | P1 | 65 | 38 | 21 | 6 | 75% |
 | P2 | 54 | 13 | 15 | 26 | 38% |
+| P1 | 66 | 40 | 20 | 6 | 76% |
+| P2 | 54 | 13 | 14 | 27 | 37% |
 
 | Area | Parity |
 |---|---|
@@ -23,7 +26,7 @@ The summary between `<!-- SUMMARY -->
 | Arrange | 100% |
 | Text | 80% |
 | Tables | 89% |
-| Charts | 65% |
+| Charts | 92% |
 | SmartArt | 33% |
 | Pictures | 48% |
 | Media | 67% |
@@ -37,6 +40,7 @@ The summary between `<!-- SUMMARY -->
 | Platforms (✱) | 67% |
 
 Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design), Format Shape pane, Font, size, bold, italic, underline, strikethrough (only Regular/Bold/Italic faces, #69), Edit chart data, Crop (and crop to shape, aspect ratio), Paste image from clipboard (fails on Windows and Linux, #53), Audio/video playback in the show (WMA/WMV not decodable yet), Animation pane (reorder, timing), Presenter view (notes, next slide, timer), macOS, Windows, Linux builds.
+Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design), Export to PDF (slides, notes pages, handouts; text layer, links, bookmarks; vector artwork pending), Format Shape pane, Font, size, bold, italic, underline, strikethrough (only Regular/Bold/Italic faces, #69), Crop (and crop to shape, aspect ratio), Paste image from clipboard (fails on Windows and Linux, #53), Audio/video playback in the show (WMA/WMV not decodable yet), Animation pane (reorder, timing), Presenter view (notes, next slide, timer), macOS, Windows, Linux builds.
 
 ## Rows
 
@@ -172,7 +176,8 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Tables | Cell fill, borders, margins, alignment | P1 | P |
 | Tables | Keyboard navigation between cells | P0 | D |
 | Charts | Insert chart (column, bar, line, area, pie, doughnut, scatter) | P0 | D |
-| Charts | Other chart types (radar, stock, combo, waterfall, funnel, treemap, sunburst, histogram, box) | P2 | P |
+| Charts | Chart type variants (stacked and 100%, markers or points only, smooth and stepped lines, exploded and of-pie, 3-D read/write) | P1 | D |
+| Charts | Other chart types (radar, stock, combo with secondary axis, bubble: done; waterfall, funnel, treemap, sunburst, histogram, box: missing) | P2 | P |
 | Charts | Edit chart data | P0 | D |
 | Charts | Chart elements (title, legend, labels, axes, gridlines) | P1 | D |
 | Charts | Chart styles and colours | P2 | P |

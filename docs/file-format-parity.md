@@ -1,6 +1,6 @@
 # File-format parity with PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (PDF export is vector; previous: minor, SmartArt text follows `dsp:txXfrm`; previous: minor, chart workbooks kept and updated; previous: trivial, Groups with a small legacy child coordinate space draw outlines, dashes, arrowheads and ink at their own width (#233)) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (chart parts: every chart type and variant; previous: minor, PDF export is vector; previous: minor, SmartArt text follows `dsp:txXfrm`; previous: minor, chart workbooks kept and updated; previous: trivial, Groups with a small legacy child coordinate space draw outlines, dashes, arrowheads and ink at their own width (#233)) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every format PowerPoint reads or writes, DeckCraft's support, fidelity and how it is tested.
 Gaps are itemized in [gaps.md](gaps.md#file-formats). Dimension score: **~58% ready**
@@ -73,6 +73,7 @@ the round trip even though DeckCraft doesn't model it.
 | Pictures with crop, recolour, duotone, alpha, luminance | yes | yes | |
 | Tables with styles | yes | yes | |
 | Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; the embedded workbook is kept, its changed cells updated in place, or generated from the chart data for new charts |
+| Charts (`c:chartSpace`) | yes | yes | Original XML kept in `Chart.raw`; every bar, line, area, pie, doughnut, of-pie, scatter, bubble, radar, stock and 3-D group and combinations with a secondary axis read and written, see [chart-type-parity.md](chart-type-parity.md) |
 | Charts (`cx:` chartex: waterfall, funnel, treemap, sunburst, histogram, box) | no | no | |
 | SmartArt (`dgm`) | drawing part only, as a group; text laid out on its `dsp:txXfrm` rectangle | as shapes | Diagram data model lost on save |
 | Equations (OMML, `a14:m`) | no | no | PR #55 open |
@@ -102,6 +103,7 @@ the round trip even though DeckCraft doesn't model it.
 | 2026-10-12 | minor | Chart workbooks survive PPTX export: kept byte for byte, changed cells updated in place, or generated for new charts |
 | 2026-10-12 | minor | SmartArt import lays each shape's text out on its `dsp:txXfrm` text rectangle instead of the shape box |
 | 2026-10-12 | minor | PDF export draws slides as vectors and real text through the renderer's canvas; effects and patterns rasterize per element |
+| 2026-10-12 | minor | Chart parts: every chart type and variant read and written ([chart-type-parity.md](chart-type-parity.md)) |
 | 2026-10-12 | minor | EMF/WMF text and pattern brushes drawn; OLE (VML) and ActiveX previews read |
 | 2026-10-12 | minor | Text warps rendered; their adjust values read and written |
 | 2026-10-12 | trivial | Groups with a small legacy child coordinate space draw outlines, dashes, arrowheads and ink at their own width (#233) |
