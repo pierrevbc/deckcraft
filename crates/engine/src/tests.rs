@@ -94,6 +94,38 @@ fn clipboard_copy_paste_shapes_and_slides() {
 }
 
 #[test]
+fn pasted_chart_brings_its_workbook() {
+    let mut s = session();
+    s.execute("insert.chart", &json!({"type": "column"})).unwrap();
+    // A workbook as a PPTX import attaches one.
+    {
+        let d = s.doc_mut().unwrap();
+        let index = d.selection.slide;
+        let doc = std::sync::Arc::make_mut(&mut d.doc);
+        let wb = doc.add_media("data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b"PK workbook".to_vec());
+        let slide = doc.slides[index].id;
+        for sh in &mut doc.slide_mut(slide).unwrap().shapes {
+            if let deckcraft_model::ShapeKind::Chart(c) = &mut sh.kind {
+                c.workbook = Some(wb);
+            }
+        }
+    }
+    s.execute("edit.copy", &json!({})).unwrap();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("edit.paste", &json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let chart = d
+        .current_slide()
+        .unwrap()
+        .shapes
+        .iter()
+        .find_map(|sh| if let deckcraft_model::ShapeKind::Chart(c) = &sh.kind { Some(c.clone()) } else { None })
+        .unwrap();
+    let wb = d.doc.media(chart.workbook.unwrap()).unwrap();
+    assert_eq!(wb.data.as_slice(), b"PK workbook");
+}
+
+#[test]
 fn group_ungroup_roundtrip_positions() {
     let mut s = session();
     let a = s.execute("shape.insert", &json!({"preset": "rect", "rect": [100, 100, 50, 50]})).unwrap()["id"].as_u64().unwrap();
