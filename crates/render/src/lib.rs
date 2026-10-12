@@ -52,7 +52,7 @@ pub use images::{decode as decode_image, gif_frame};
 pub use morph_path::PathMorph;
 pub use morph_text::TextMorph;
 pub use placed::{Placed, PlacedLink, PlacedText, place_slide};
-pub use table::row_heights as table_row_heights;
+pub use table::{cell_body as table_cell_body, cell_rects as table_cell_rects, row_heights as table_row_heights};
 pub use transition::{SlideParts, composite_transition, render_transition};
 
 /// Largest pixmap side we render (vello_cpu uses u16 sizes).
