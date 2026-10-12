@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::MediaId;
 use crate::style::{ColorRef, Fill, Line};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +163,10 @@ pub struct Chart {
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// The spreadsheet that holds the chart data in a PPTX (embedded workbook, or a link to one),
+    /// kept so PowerPoint's Edit Data still works after a round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workbook: Option<MediaId>,
 }
 
 impl Default for Chart {
@@ -187,6 +192,7 @@ impl Default for Chart {
             y_min: None,
             y_max: None,
             raw: None,
+            workbook: None,
         }
     }
 }

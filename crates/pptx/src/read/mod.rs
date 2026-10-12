@@ -6,7 +6,7 @@ mod shapes;
 mod theme;
 mod timing;
 
-pub(crate) use chart::{chart_from as chart_from_el, read_chart_xml};
+pub(crate) use chart::{chart_from as chart_from_el, read_chart_part};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

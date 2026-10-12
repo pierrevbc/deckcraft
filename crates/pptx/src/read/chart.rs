@@ -1,8 +1,11 @@
-//! Chart parts (`c:chartSpace`) → [`Chart`]. The original XML is kept in `Chart.raw`.
+//! Chart parts (`c:chartSpace`) → [`Chart`]. The original XML is kept in `Chart.raw`, the data
+//! workbook it points to in `Chart.workbook`.
 
+use deckcraft_model::MediaId;
 use deckcraft_model::chart::{Chart, ChartType, Series};
 use deckcraft_model::style::Fill;
 
+use super::Imp;
 use crate::xml::El;
 
 /// Fills of chart parts never reference images we keep; read colour fills only.
@@ -83,6 +86,29 @@ pub fn read_chart_xml(bytes: &[u8]) -> Option<Chart> {
     let mut c = chart_from(&root)?;
     c.raw = Some(String::from_utf8_lossy(bytes).into_owned());
     Some(c)
+}
+
+/// Parse the chart part `name` and keep the workbook that holds its data.
+pub fn read_chart_part(imp: &mut Imp, name: &str, bytes: &[u8]) -> Option<Chart> {
+    let mut c = read_chart_xml(bytes)?;
+    c.workbook = workbook(imp, name, bytes);
+    Some(c)
+}
+
+/// The target of `c:externalData`: an embedded workbook (`package`, or an older `oleObject`)
+/// read as a media item, or a link to an outside file.
+fn workbook(imp: &mut Imp, name: &str, bytes: &[u8]) -> Option<MediaId> {
+    let doc = crate::xml::parse(bytes).ok()?;
+    let rid = doc.root.child("externalData")?.attr("r:id")?.to_string();
+    let rels = imp.pkg.rels(name);
+    let rel = rels.get(&rid)?;
+    if rel.external {
+        return Some(imp.media_link(&rel.target));
+    }
+    if !matches!(rel.kind.as_str(), "package" | "oleObject") {
+        return None;
+    }
+    imp.media_for(&rel.target)
 }
 
 pub(crate) fn chart_from(root: &El) -> Option<Chart> {
