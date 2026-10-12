@@ -577,7 +577,7 @@ fn only_chart(p: &Presentation) -> Chart {
 }
 
 /// PowerPoint's Edit Data opens the workbook embedded with a chart: it is written, kept through a
-/// round trip, and rebuilt from the chart data when that data changes.
+/// round trip, and updated with the chart data when that data changes (more in `chart_workbook.rs`).
 #[test]
 fn chart_workbook_round_trip() {
     let mut p = defaults::new_presentation(None);
@@ -605,7 +605,7 @@ fn chart_workbook_round_trip() {
     let second = deckcraft_pptx::export(&q).expect("export");
     assert_eq!(entries(&second, "ppt/embeddings/")[0].1, books[0].1);
 
-    // New numbers: the workbook is rebuilt so Edit Data shows them.
+    // New numbers: the workbook is updated so Edit Data shows them.
     let mut r = q.clone();
     for s in &mut r.slides {
         for sh in &mut Arc::make_mut(s).shapes {
