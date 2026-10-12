@@ -9,25 +9,15 @@ use deckcraft_model::style::Fill;
 use super::Imp;
 use crate::xml::El;
 
+mod format;
+
 /// Fills of chart parts never reference images we keep; read colour fills only.
 fn simple_fill(sp: Option<&El>) -> Option<Fill> {
-    let sp = sp?;
-    for e in sp.elements() {
-        match e.local() {
-            "noFill" => return Some(Fill::None),
-            "solidFill" => return super::dml::color(e).map(|color| Fill::Solid { color }),
-            "gradFill" => return Some(Fill::Gradient(super::dml::gradient(e))),
-            _ => {}
-        }
-    }
-    None
+    format::fill_of(sp)
 }
 
 fn simple_line(sp: Option<&El>) -> Option<deckcraft_model::Line> {
-    let ln = sp?.child("ln")?;
-    let mut l = deckcraft_model::Line { width: super::dml::pt(ln, "w"), ..Default::default() };
-    l.fill = simple_fill(Some(ln));
-    Some(l)
+    format::line_of(sp)
 }
 
 fn rich_text(t: &El) -> Option<String> {
@@ -386,6 +376,7 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
                     ser.line = None;
                 }
             }
+            format::read_series_format(s, &mut ser);
             if let Some(cat) = s.child("cat").or_else(|| s.child("xVal")) {
                 let cats = strings(cat);
                 if kind.is_xy() {
@@ -495,6 +486,7 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
     let chart_size = text_size(root.child("txPr"));
     c.text_size = [val_ax, cat_ax, ch.child("legend")].into_iter().flatten().find_map(|e| text_size(e.child("txPr"))).or(chart_size);
     c.title_size = ch.child("title").and_then(|t| text_size(t.child("tx").and_then(|x| x.child("rich"))).or_else(|| text_size(t.child("txPr"))));
+    format::read_format(root, ch, pa, &mut c, val_ax, cat_ax);
     Some(c)
 }
 

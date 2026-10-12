@@ -12,13 +12,15 @@
 
 use std::collections::BTreeMap;
 
-use deckcraft_color::SchemeSlot;
 use deckcraft_model::chart::{Chart, ChartType, Series, ThreeD};
-use deckcraft_model::style::{ColorRef, Fill};
+use deckcraft_model::chart_format::{AxisFormat, Crosses};
+use deckcraft_model::style::Fill;
 
 use super::xlsx::{AreaMove, Edit, Range, Value, parse_range};
 use crate::opc::{NS_A, NS_C, NS_R, PackageOut, RelsOut};
 use crate::xml::{A, El, W};
+
+mod format;
 
 /// Content type of an embedded `.xlsx` workbook.
 pub const CT_XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -330,59 +332,8 @@ pub fn source(c: &Chart) -> Option<Source> {
     Some(Source { refs, edits, area })
 }
 
-fn simple_fill(w: &mut W, f: &Fill) {
-    match f {
-        Fill::None => w.empty0("a:noFill"),
-        Fill::Solid { color } => super::dml::solid(w, color),
-        Fill::Gradient(_) | Fill::Picture(_) | Fill::Pattern(_) | Fill::Group | Fill::Background => {
-            if let Fill::Gradient(g) = f
-                && let Some(s) = g.stops.first()
-            {
-                super::dml::solid(w, &s.color);
-            }
-        }
-    }
-}
-
 fn sp_pr(w: &mut W, fill: Option<&Fill>, line: Option<&deckcraft_model::Line>) {
-    if fill.is_none() && line.is_none() {
-        return;
-    }
-    w.open0("c:spPr");
-    if let Some(f) = fill {
-        simple_fill(w, f);
-    }
-    if let Some(l) = line {
-        w.open("a:ln", A::new().o("w", l.width.map(super::dml::emu_pos)));
-        if let Some(f) = &l.fill {
-            simple_fill(w, f);
-        }
-        w.close("a:ln");
-    }
-    w.close("c:spPr");
-}
-
-fn rich(w: &mut W, text: &str) {
-    w.open0("c:tx");
-    w.open0("c:rich");
-    w.empty0("a:bodyPr");
-    w.empty0("a:lstStyle");
-    for line in text.split('\n') {
-        w.open0("a:p");
-        w.open0("a:r");
-        w.elt("a:t", line);
-        w.close("a:r");
-        w.close("a:p");
-    }
-    w.close("c:rich");
-    w.close("c:tx");
-}
-
-fn title(w: &mut W, text: &str) {
-    w.open0("c:title");
-    rich(w, text);
-    w.val("c:overlay", 0);
-    w.close("c:title");
+    format::sp_pr(w, fill, line);
 }
 
 fn str_cache(w: &mut W, f: &str, vals: &[String]) {
@@ -483,23 +434,6 @@ fn has_3d(g: Group) -> bool {
     matches!(g, Group::Bar | Group::Line | Group::Area | Group::Pie)
 }
 
-/// `c:spPr` of a series: its fill and line, with no line at all for the types that draw none
-/// (points only, stock prices: their high-low lines and up-down bars are the group's).
-fn series_sp_pr(w: &mut W, s: &Series, no_line: bool) {
-    if !no_line {
-        sp_pr(w, s.fill.as_ref(), s.line.as_ref());
-        return;
-    }
-    w.open0("c:spPr");
-    if let Some(f) = &s.fill {
-        simple_fill(w, f);
-    }
-    w.open("a:ln", A::new().o("w", s.line.as_ref().and_then(|l| l.width).map(super::dml::emu_pos)));
-    w.empty0("a:noFill");
-    w.close("a:ln");
-    w.close("c:spPr");
-}
-
 fn marker(w: &mut W, symbol: &str, size: Option<u32>) {
     if !symbol.chars().all(|c| c.is_ascii_alphanumeric()) {
         return;
@@ -512,29 +446,6 @@ fn marker(w: &mut W, symbol: &str, size: Option<u32>) {
     w.close("c:marker");
 }
 
-/// A marker filled and outlined with the series colour: its own fill, else the theme accent the
-/// series takes.
-fn coloured_marker(w: &mut W, s: &Series, i: usize) {
-    let col = match &s.fill {
-        Some(Fill::Solid { color }) => color.clone(),
-        _ => ColorRef::scheme(ACCENTS.get(i % 6).copied().unwrap_or(SchemeSlot::Accent1)),
-    };
-    w.open0("c:marker");
-    if let Some(m) = s.marker.as_deref().filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric())) {
-        w.val("c:symbol", m);
-    }
-    w.open0("c:spPr");
-    super::dml::solid(w, &col);
-    w.open("a:ln", A::new().a("w", 9525));
-    super::dml::solid(w, &col);
-    w.close("a:ln");
-    w.close("c:spPr");
-    w.close("c:marker");
-}
-
-const ACCENTS: [SchemeSlot; 6] =
-    [SchemeSlot::Accent1, SchemeSlot::Accent2, SchemeSlot::Accent3, SchemeSlot::Accent4, SchemeSlot::Accent5, SchemeSlot::Accent6];
-
 #[allow(clippy::too_many_arguments)]
 fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType, g: Group, close: bool) {
     w.open0("c:ser");
@@ -543,41 +454,57 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType,
     w.open0("c:tx");
     str_cache(w, &r.name, std::slice::from_ref(&s.name));
     w.close("c:tx");
-    series_sp_pr(w, s, kind.points_only() || g == Group::Stock);
-    if g == Group::Bar {
-        w.val("c:invertIfNegative", 0);
+    // A palette other than the default one writes its colours, which nothing else records.
+    let palette = c.palette != deckcraft_model::chart_format::DEFAULT_PALETTE;
+    let n = c.series.len();
+    let pie = matches!(g, Group::Pie | Group::Doughnut | Group::OfPie);
+    let vary_points = pie && (c.vary_colors || g == Group::Doughnut);
+    let colour = || Fill::solid(deckcraft_model::chart_format::palette_color(&c.palette, i, n));
+    // Lines take the colour on their outline (and markers), the others on their fill.
+    let lines = matches!(g, Group::Line | Group::Scatter) || (g == Group::Radar && kind != ChartType::FilledRadar);
+    let own = (palette && s.fill.is_none() && !vary_points && !lines).then(colour);
+    let own_line = (palette && lines && s.line.as_ref().and_then(|l| l.fill.as_ref()).is_none())
+        .then(|| deckcraft_model::Line { fill: Some(colour()), ..s.line.clone().unwrap_or_default() });
+    let line = own_line.as_ref().or(s.line.as_ref());
+    if kind.points_only() || g == Group::Stock {
+        // No line at all for the types that draw none (points only, stock prices: their high-low
+        // lines and up-down bars are the group's).
+        let none = deckcraft_model::Line { fill: Some(Fill::None), width: line.and_then(|l| l.width), ..Default::default() };
+        sp_pr(w, s.fill.as_ref().or(own.as_ref()), Some(&none));
+    } else {
+        sp_pr(w, s.fill.as_ref().or(own.as_ref()), line);
     }
-    if matches!(g, Group::Pie | Group::Doughnut) && kind.exploded() {
-        w.val("c:explosion", c.variant.explosion_or_default());
+    if g == Group::Bar {
+        w.val("c:invertIfNegative", if s.format.invert_if_negative { 1 } else { 0 });
+    }
+    if matches!(g, Group::Pie | Group::Doughnut) {
+        let x = s.format.explosion.or(kind.exploded().then(|| c.variant.explosion_or_default()));
+        if let Some(x) = x.filter(|x| *x > 0) {
+            w.val("c:explosion", x.min(400));
+        }
     }
     match g {
         Group::Stock if close && !kind.has_open() => marker(w, "dash", Some(7)),
         Group::Stock => marker(w, "none", None),
-        // Markers without a line: their colour is spelled out, as applications that take a
-        // marker's colour from the series line would draw them all alike.
-        Group::Line | Group::Scatter | Group::Radar if kind.points_only() => coloured_marker(w, s, i),
-        Group::Line | Group::Scatter | Group::Radar => match &s.marker {
-            Some(m) if !m.is_empty() && kind.markers() => marker(w, m, None),
-            _ if kind.markers() => {}
-            _ => marker(w, "none", None),
-        },
+        Group::Line | Group::Scatter | Group::Radar => {
+            // The series' own symbol, the type's default, or none for the types without markers.
+            let sym = match s.marker.as_deref() {
+                Some(m) if !m.is_empty() && m != "auto" => Some(m),
+                _ if kind.markers() => None,
+                _ => Some("none"),
+            };
+            // Markers without a line: their colour is spelled out, as applications that take a
+            // marker's colour from the series line would draw them all alike.
+            let auto = if kind.points_only() { Some(s.fill.clone().unwrap_or_else(colour)) } else { own_line.as_ref().and_then(|l| l.fill.clone()) };
+            format::marker(w, sym, s, auto.as_ref());
+        }
         _ => {}
     }
-    if matches!(g, Group::Pie | Group::Doughnut | Group::OfPie | Group::Bar) {
-        for (idx, f) in s.point_fills.iter().take(1000) {
-            w.open0("c:dPt");
-            w.val("c:idx", idx);
-            if g == Group::Bar {
-                w.val("c:invertIfNegative", 0);
-            } else {
-                w.val("c:bubble3D", 0);
-            }
-            sp_pr(w, Some(f), None);
-            w.close("c:dPt");
-        }
-    }
+    let points = s.values.len();
+    let vary = move |k: usize| Fill::solid(deckcraft_model::chart_format::palette_color(&c.palette, k, points));
+    format::points(w, s, g, (palette && vary_points).then_some(&vary as &dyn Fn(usize) -> Fill));
     if let Some(d) = s.data_labels {
-        data_labels(w, d);
+        format::dlbls(w, &c.format.labels, d, g, kind.stacked());
     }
     if matches!(g, Group::Scatter | Group::Bubble) {
         w.open0("c:xVal");
@@ -608,29 +535,14 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType,
     w.close("c:ser");
 }
 
-fn data_labels(w: &mut W, show: bool) {
-    w.open0("c:dLbls");
-    for (n, v) in [
-        ("c:showLegendKey", false),
-        ("c:showVal", show),
-        ("c:showCatName", false),
-        ("c:showSerName", false),
-        ("c:showPercent", false),
-        ("c:showBubbleSize", false),
-    ] {
-        w.val(n, if v { 1 } else { 0 });
-    }
-    w.close("c:dLbls");
-}
-
 const AX_CAT: u32 = 50_001;
 const AX_VAL: u32 = 50_002;
 const AX_CAT2: u32 = 50_003;
 const AX_VAL2: u32 = 50_004;
 const AX_SER: u32 = 50_005;
 
-/// The axes of plot groups of kind `g` using `ids`; `secondary` ones sit on the right, their
-/// category axis hidden.
+/// The axes of plot groups of kind `g` using `ids`, with the chart's axis formatting;
+/// `secondary` ones sit on the right, their category axis hidden, unformatted.
 fn axes(w: &mut W, c: &Chart, g: Group, ids: AxIds, secondary: bool) {
     let horizontal = c.kind.horizontal() && g == Group::Bar;
     let (cat_pos, val_pos) = match (horizontal, secondary) {
@@ -639,77 +551,43 @@ fn axes(w: &mut W, c: &Chart, g: Group, ids: AxIds, secondary: bool) {
         (false, false) => ("b", "l"),
         (false, true) => ("t", "r"),
     };
-    if g == Group::Scatter || g == Group::Bubble {
-        w.open0("c:valAx");
-        w.val("c:axId", ids.cat);
-        w.open0("c:scaling");
-        w.val("c:orientation", "minMax");
-        w.close("c:scaling");
-        w.val("c:delete", 0);
-        w.val("c:axPos", "b");
-        if let Some(t) = &c.axis_titles.0 {
-            title(w, t);
-        }
-        w.empty("c:numFmt", A::new().a("formatCode", "General").a("sourceLinked", 1));
-        w.val("c:majorTickMark", "out");
-        w.val("c:minorTickMark", "none");
-        w.val("c:tickLblPos", "nextTo");
-        w.val("c:crossAx", ids.val);
-        w.val("c:crosses", "autoZero");
-        w.val("c:crossBetween", "midCat");
-        w.close("c:valAx");
-    } else {
-        w.open0("c:catAx");
-        w.val("c:axId", ids.cat);
-        w.open0("c:scaling");
-        w.val("c:orientation", "minMax");
-        w.close("c:scaling");
-        w.val("c:delete", if secondary { 1 } else { 0 });
-        w.val("c:axPos", cat_pos);
-        if let Some(t) = c.axis_titles.0.as_ref().filter(|_| !secondary) {
-            title(w, t);
-        }
-        w.empty("c:numFmt", A::new().a("formatCode", "General").a("sourceLinked", 1));
-        w.val("c:majorTickMark", "none");
-        w.val("c:minorTickMark", "none");
-        w.val("c:tickLblPos", "nextTo");
-        w.val("c:crossAx", ids.val);
-        w.val("c:crosses", "autoZero");
-        w.val("c:auto", 1);
-        w.val("c:lblAlgn", "ctr");
-        w.val("c:lblOffset", 100);
-        w.val("c:noMultiLvlLbl", 0);
-        w.close("c:catAx");
-    }
-    w.open0("c:valAx");
-    w.val("c:axId", ids.val);
-    w.open0("c:scaling");
-    w.val("c:orientation", "minMax");
-    if !secondary {
-        if let Some(m) = c.y_max.filter(|v| v.is_finite()) {
-            w.val("c:max", fmt_num(m));
-        }
-        if let Some(m) = c.y_min.filter(|v| v.is_finite()) {
-            w.val("c:min", fmt_num(m));
-        }
-    }
-    w.close("c:scaling");
-    w.val("c:delete", 0);
-    w.val("c:axPos", val_pos);
-    if c.gridlines && !secondary {
-        w.empty0("c:majorGridlines");
-    }
-    if let Some(t) = c.axis_titles.1.as_ref().filter(|_| !secondary) {
-        title(w, t);
-    }
-    w.empty("c:numFmt", A::new().a("formatCode", if c.kind.percent() { "0%" } else { "General" }).a("sourceLinked", 1));
-    w.val("c:majorTickMark", "none");
-    w.val("c:minorTickMark", "none");
-    w.val("c:tickLblPos", "nextTo");
-    w.val("c:crossAx", ids.cat);
-    w.val("c:crosses", if secondary { "max" } else { "autoZero" });
-    w.val("c:crossBetween", if g == Group::Area || g == Group::Scatter { "midCat" } else { "between" });
-    w.close("c:valAx");
+    let xy = g == Group::Scatter || g == Group::Bubble;
+    let hidden = AxisFormat { hidden: true, ..Default::default() };
+    let at_max = AxisFormat { crosses: Some(Crosses::Max), ..Default::default() };
+    format::axis(
+        w,
+        &format::AxisSpec {
+            tag: if xy { "c:valAx" } else { "c:catAx" },
+            id: ids.cat,
+            cross: ids.val,
+            pos: cat_pos,
+            fmt: if secondary { &hidden } else { &c.format.cat_axis },
+            major_gridlines: !secondary && c.format.cat_axis.major_gridlines,
+            title: c.axis_titles.0.as_deref().filter(|_| !secondary),
+            min: None,
+            max: None,
+            num_fmt: "General",
+            major_tick: if xy { "out" } else { "none" },
+            cross_between: xy.then_some("midCat"),
+        },
+    );
+    format::axis(
+        w,
+        &format::AxisSpec {
+            tag: "c:valAx",
+            id: ids.val,
+            cross: ids.cat,
+            pos: val_pos,
+            fmt: if secondary { &at_max } else { &c.format.val_axis },
+            major_gridlines: c.gridlines && !secondary,
+            title: c.axis_titles.1.as_deref().filter(|_| !secondary),
+            min: if secondary { None } else { c.y_min },
+            max: if secondary { None } else { c.y_max },
+            num_fmt: if c.kind.percent() { "0%" } else { "General" },
+            major_tick: "none",
+            cross_between: Some(if g == Group::Area || g == Group::Scatter { "midCat" } else { "between" }),
+        },
+    );
     if let Some(ser) = ids.ser {
         w.open0("c:serAx");
         w.val("c:axId", ser);
@@ -766,7 +644,7 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
         series(w, c, s, *i, refs.get(*i).unwrap_or(&Refs::default()), kind, g, k == last);
     }
     if c.data_labels {
-        data_labels(w, true);
+        format::dlbls(w, &c.format.labels, true, g, kind.stacked());
     }
     match g {
         Group::Bar => {
@@ -781,9 +659,9 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
             }
         }
         Group::Line if three_d.is_none() => w.val("c:marker", 1),
-        Group::Pie if three_d.is_none() => w.val("c:firstSliceAng", 0),
+        Group::Pie if three_d.is_none() => w.val("c:firstSliceAng", first_slice(c)),
         Group::Doughnut => {
-            w.val("c:firstSliceAng", 0);
+            w.val("c:firstSliceAng", first_slice(c));
             w.val("c:holeSize", (c.hole_size.clamp(0.1, 0.9) * 100.0).round() as i64);
         }
         Group::OfPie => {
@@ -817,6 +695,12 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
         }
     }
     w.close(tag);
+}
+
+/// Angle of the first pie slice, whole degrees 0–360.
+fn first_slice(c: &Chart) -> i64 {
+    let a = c.format.first_slice_angle;
+    if a.is_finite() { (a.rem_euclid(360.0).round() as i64).clamp(0, 360) } else { 0 }
 }
 
 /// The plot groups of a chart that mixes types or axes: one per series type and axis, in the
@@ -974,12 +858,13 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>, refs: Opti
     let mut w = W::new();
     w.open("c:chartSpace", A::new().a("xmlns:c", NS_C).a("xmlns:a", NS_A).a("xmlns:r", NS_R));
     w.val("c:date1904", 0);
-    w.val("c:roundedCorners", 0);
+    w.val("c:roundedCorners", if c.format.rounded_corners { 1 } else { 0 });
     w.val("c:style", c.style.clamp(1, 48));
     w.open0("c:chart");
     match &c.title {
         Some(t) => {
-            title(&mut w, t);
+            let f = &c.format;
+            format::title(&mut w, t, &f.title_text, f.title_overlay, f.title_fill.as_ref(), f.title_line.as_ref());
             w.val("c:autoTitleDeleted", 0);
         }
         None => w.val("c:autoTitleDeleted", 1),
@@ -993,26 +878,15 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>, refs: Opti
     w.open0("c:plotArea");
     w.empty0("c:layout");
     plot_area(&mut w, c, &refs);
-    if let Some(f) = &c.plot_fill {
-        sp_pr(&mut w, Some(f), None);
-    }
+    sp_pr(&mut w, c.plot_fill.as_ref(), c.format.plot_line.as_ref());
     w.close("c:plotArea");
-    if let Some(pos) = &c.legend {
-        let p = match pos.as_str() {
-            "b" | "t" | "l" | "r" | "tr" => pos.as_str(),
-            _ => "r",
-        };
-        w.open0("c:legend");
-        w.val("c:legendPos", p);
-        w.val("c:overlay", u8::from(c.legend_overlay));
-        w.close("c:legend");
-    }
+    format::legend(&mut w, c);
     w.val("c:plotVisOnly", 1);
     w.val("c:dispBlanksAs", "gap");
     w.close("c:chart");
-    if let Some(f) = &c.chart_fill {
-        sp_pr(&mut w, Some(f), None);
-    }
+    sp_pr(&mut w, c.chart_fill.as_ref(), c.format.chart_line.as_ref());
+    let text = c.format.text.over(&deckcraft_model::chart_format::ChartText { color: c.text_color.clone(), ..Default::default() });
+    format::tx_pr(&mut w, &text, None);
     if let Some(rid) = workbook {
         w.open("c:externalData", A::new().a("r:id", rid));
         w.val("c:autoUpdate", 0);
