@@ -1,0 +1,104 @@
+# Chart type parity
+
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** major (created; every LibreOffice Impress chart type and variant audited, then filled in) · **Target:** the chart types of LibreOffice Impress 26 and their PowerPoint counterparts
+
+Every chart type and variant LibreOffice Impress offers in its chart type dialog, with
+PowerPoint's name where it has one, and what DeckCraft does with it: model, drawing, PPTX read,
+PPTX write, gallery. The PowerPoint-only `chartex` types (waterfall, funnel, treemap, sunburst,
+histogram, box and whisker) are tracked in [file-format-parity.md](file-format-parity.md) and
+[gaps.md](gaps.md).
+
+The gallery is `ChartPreset::GALLERY` (`crates/model/src/chart.rs`): 61 entries in ten families,
+listed by Insert ▸ Chart and Chart Design ▸ Change Chart Type, and taken by `insert.chart {type}`
+and `chart.type {type}` as preset ids (`column3d`, `lineSmooth`, `stockOhlc`,
+`columnLineSecondary`…). A type is `Chart.kind` (`ChartType`); what makes a variant beyond it
+(stepped lines, explosion, pie of pie split, 3-D view and bar shape) is `Chart.variant`.
+
+## Audit
+
+Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this work started from
+(0.6.0, the chart workbook fix and the first chart data editor).
+
+| Type / variant | Model | Draw | PPTX read | PPTX write | Gallery | Before (model / draw / read / write / gallery) |
+|---|---|---|---|---|---|---|
+| Column: clustered, stacked, 100% | Y | Y | Y | Y | Y | Y / Y / Y / Y / clustered only |
+| Bar: clustered, stacked, 100% | Y | Y | Y | Y | Y | Y / P (categories top-down) / Y / Y / clustered only |
+| Pie | Y | Y | Y | Y | Y | Y / Y / Y / Y / Y |
+| Exploded pie | Y | Y | Y | Y | Y | N / N / read as pie / N / N |
+| Doughnut | Y | Y (a ring per series) | Y | Y | Y | Y / P (first series, white hole) / Y / Y / Y |
+| Exploded doughnut | Y | Y | Y | Y | Y | N / N / read as doughnut / N / N |
+| Pie of pie, bar of pie | Y | Y | Y | Y | Y | N / N / read as pie / N / N |
+| Area | Y | Y | Y | Y | Y | Y / Y / Y / Y / Y |
+| Stacked area | Y | Y | Y | Y | Y | Y / P (series covered each other) / Y / Y / N |
+| 100% stacked area | Y | Y | Y | Y | Y | N / N / read as stacked / N / N |
+| Line: lines only | Y | Y | Y | Y | Y | Y / Y / Y / Y / Y |
+| Line: points and lines | Y | Y | Y | Y | Y | Y / Y / Y / Y / N |
+| Line: points only | Y | Y | Y | Y | Y | N / N (drawn with lines) / read with markers / N / N |
+| Line: stacked, with or without markers | Y | Y | Y | Y | Y | lines only / Y / markers lost / Y / N |
+| Line: 100% stacked, with or without markers | Y | Y | Y | Y | Y | N / N / read as stacked / N / N |
+| Line type: smooth | Y | Y | Y | Y | Y | P (per series) / N / Y / Y / N |
+| Line type: stepped | Y | Y | Y (our extension) | Y (our extension) | Y | N / N / N / N / N |
+| XY scatter: points only | Y | Y | Y | Y | Y | Y / P (no X axis) / Y / P (other apps drew lines) / Y |
+| XY scatter: points and lines, lines only | Y | Y | Y | Y | Y | N / N / read as points only / N / N |
+| XY scatter: smooth, stepped | Y | Y | Y (stepped: our extension) | Y (stepped: our extension) | Y | P / N / P / P / N |
+| Bubble | Y | Y (sized bubbles) | Y | Y | Y | Y / P (fixed dots) / Y / Y / N |
+| Radar (net): lines only | Y | Y | Y | Y | Y | Y / N (drawn as a line chart) / Y / Y / Y |
+| Radar: points and lines, points only | Y | Y | Y | Y | Y | N / N / read as lines only / N / N |
+| Radar: filled | Y | Y | Y | Y | Y | Y / N (drawn as an area chart) / Y / Y / N |
+| Stock: high-low-close | Y | Y | Y | Y | Y | Y / N (drawn as lines) / Y / N (written as a line chart) / N |
+| Stock: open-high-low-close (candlestick) | Y | Y | Y | Y | Y | N / N / read as high-low-close / N / N |
+| Stock: volume-high-low-close | Y | Y | Y | Y | Y | N / N / read as a combo / N / N |
+| Stock: volume-open-high-low-close | Y | Y | Y | Y | Y | N / N / read as a combo / N / N |
+| Column and line | Y | Y | Y | Y | Y | Y / N (all drawn as lines) / Y / Y / N |
+| Stacked columns and line | Y | Y | Y | Y | Y | Y / N / Y / Y / N |
+| Secondary value axis | Y | Y | Y | Y | Y | field only / N / N / N / N |
+| 3-D column and bar (clustered, stacked, 100%, deep) | Y | P (simple depth) | Y | Y | Y | N / N / read as 2-D / N / N |
+| Cylinder, cone, pyramid bars | Y | P (shape outlines) | Y | Y | Y | N / N / read as 2-D / N / N |
+| 3-D pie, exploded 3-D pie | Y | Y (tilted, with rim) | Y | Y | Y | N / N / read as 2-D / N / N |
+| 3-D area (deep, stacked, 100%) | Y | P (drawn flat) | Y | Y | Y | N / N / read as 2-D / N / N |
+| 3-D line (deep) | Y | P (drawn flat) | Y | Y | Y | N / N / read as 2-D / N / N |
+
+Before this work, an imported chart left unchanged kept its original chart part, so 3-D and other
+unmodelled variants survived a plain open-and-save; any edit lost them. Now the model holds them.
+
+## How it is verified
+
+- `crates/pptx/tests/chart_types.rs`: a deck with one chart per gallery entry is exported, imported
+  and compared (type, variant, series, data, categories, X values and bubble sizes, secondary axis,
+  combo series types), a second export writes the same chart parts and workbooks; odd data (no
+  series, a single point, stock charts short of prices) still makes valid parts; changing the type
+  of an imported chart keeps its workbook.
+- `crates/pptx/src/write/chart.rs` tests: for every gallery entry, each cached value of the chart
+  part sits in the generated workbook cell its formula points to (Edit Data in PowerPoint, Excel
+  and LibreOffice opens the chart's own numbers); each type writes its own plot groups and axes.
+- `crates/render/src/chart.rs` tests: every gallery entry draws, variants draw differently, stacked
+  areas do not cover each other, odd data never panics.
+- `crates/model` and `crates/engine` tests: presets apply and match one gallery entry, every entry
+  inserts and changes a chart through the commands.
+- By hand (2026-10-12): the gallery deck (`deckcraft-cli run … insert.chart`) rendered with
+  `deckcraft-cli render` and converted to PDF with LibreOffice 26: LibreOffice opens every chart as
+  the same type and variant, 3-D ones in 3-D. The deck saved again as PPTX by LibreOffice reads back
+  as the same types, except pie of pie and bar of pie (LibreOffice writes them as plain pies) and
+  stepped lines (LibreOffice has no OOXML for them).
+
+## Limits
+
+- Stepped lines: OOXML has no stepped line. DeckCraft keeps them in a chart-space extension
+  (`urn:deckcraft:chart`); PowerPoint and LibreOffice draw straight lines. LibreOffice's step
+  variants (start, end, centred) are not modelled: DeckCraft steps across, then up or down.
+- 3-D: no 3-D renderer. Columns and bars get a simple depth (box faces, cylinder caps, cone and
+  pyramid outlines), pies a tilt and a rim; deep charts draw their series side by side, 3-D areas
+  and lines are flat. View angles, perspective and depth are kept for the file.
+- Pie of pie and bar of pie: the second plot shows the last points (a third of them by default, or
+  the file's split position); split by value, percentage or a custom choice is read as automatic.
+- Explosion is one amount for the whole series; a single pulled-out slice is not modelled (the
+  original part keeps it while the chart is unchanged).
+- LibreOffice's "stack series" for radar charts and "sort by X values" for scatter charts are not
+  modelled.
+- Gap width, overlap, marker size, colours and axis scaling are formatting, outside this work.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-12 | major | Created: audit of the LibreOffice Impress chart types and variants, all filled in (model, drawing, PPTX read and write, gallery) |

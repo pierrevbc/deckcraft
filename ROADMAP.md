@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~20 points and ~120–210 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: table cell editing and border resizing; previous: minor, title bar Export button) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: every LibreOffice chart type and variant; previous: minor, progress log: table cell editing and border resizing) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 DeckCraft aims at full PowerPoint parity, and to be better: faster, open (a documented zip+JSON
 format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and available everywhere
@@ -128,6 +128,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Every LibreOffice Impress chart type and variant: stacked and 100% lines and areas, points-only and stepped lines, exploded pies and doughnuts, pie and bar of pie, scatter and radar variants, sized bubbles, the four stock charts, column-line combos with a secondary axis, 3-D charts kept through PPTX and drawn with a simple depth; a chart gallery by family ([chart-type-parity.md](docs/chart-type-parity.md)) |
 | 2026-10-11 | Interactive GridCraft spreadsheet data editor for charts; live chart sync on cell edit; chart title and elements options; CSV export / GridCraft launcher; full support and test coverage for the first five chart types (Clustered Column, Clustered Bar, Line, Area, Pie) |
 | 2026-10-12 | Tables: the caret and text selection show in the cell being edited; clicks and double-clicks place the caret in the clicked cell (and select the word); dragging inner column borders, the right edge and row borders resizes them in one undo step; Tab skips cells hidden under a merge |
 | 2026-10-12 | Title bar: Export button next to Save, opening the Export dialog on every platform (a shortcut beside File › Export) |
@@ -155,6 +156,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Progress log: every LibreOffice chart type and variant |
 | 2026-10-12 | minor | Progress log: table cell editing and border resizing |
 | 2026-10-12 | trivial | Progress log: File tab (Backstage, #76) |
 | 2026-10-12 | trivial | Progress log: lines in scaled groups (#233) |
