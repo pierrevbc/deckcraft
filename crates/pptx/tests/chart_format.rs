@@ -64,7 +64,7 @@ fn looks(c: &Chart) -> Value {
         })
         .collect();
     // Pie charts have no axes, hence no gridlines to keep.
-    let axes = !matches!(c.kind, deckcraft_model::chart::ChartType::Pie | deckcraft_model::chart::ChartType::Doughnut);
+    let axes = !c.kind.is_pie();
     json!({
         "title": c.title, "legend": c.legend, "labels": c.data_labels, "gridlines": c.gridlines && axes, "axisTitles": c.axis_titles,
         "plotFill": c.plot_fill, "chartFill": c.chart_fill, "gap": c.gap_width, "hole": c.hole_size, "vary": c.vary_colors,
@@ -271,4 +271,122 @@ fn label_positions_follow_the_chart_type() {
     let s = formatted("line", &[("chart.format.labels", json!({"show": true, "position": "below"}))]);
     let (_, _, xml) = round_trip(&s);
     assert!(xml.contains(r#"<c:dLblPos val="b"/>"#), "{xml}");
+}
+
+/// Every chart family keeps its formatting through a PPTX, and its type and variant too: stock
+/// charts (with volume), radar with markers, scatter with lines and X bounds, pie of pie,
+/// exploded doughnut, 3-D columns, column-line combo on a secondary axis, bubbles.
+#[test]
+fn every_chart_family_keeps_its_formatting() {
+    let gradient = json!({"gradient": {"stops": [[0, "#9DC3E6"], [1, "#1F4E79"]], "angle": 90}});
+    let cases: Vec<(&str, Vec<(&str, Value)>)> = vec![
+        (
+            "stockOhlc",
+            vec![
+                ("chart.format.axis", json!({"axis": "value", "numFmt": "$0", "majorTick": "out", "minorGridlines": true})),
+                ("chart.format.axis", json!({"axis": "category", "rotation": -45})),
+            ],
+        ),
+        (
+            "stockVohlc",
+            vec![
+                ("chart.format.series", json!({"series": 0, "fill": gradient})),
+                ("chart.format.axis", json!({"axis": "value", "min": 0, "max": 400})),
+            ],
+        ),
+        (
+            "radarMarkers",
+            vec![
+                (
+                    "chart.format.series",
+                    json!({"series": 0, "line": {"color": "#7F7F7F", "width": 2, "dash": "dash"}, "marker": "diamond", "markerSize": 9, "markerFill": "#FFFFFF"}),
+                ),
+                ("chart.format.axis", json!({"axis": "value", "numFmt": "0.0"})),
+            ],
+        ),
+        (
+            "scatterLines",
+            vec![
+                ("chart.format.series", json!({"series": 1, "line": {"color": "accent4", "width": 3, "dash": "sysDot"}})),
+                ("chart.format.axis", json!({"axis": "category", "min": 0, "max": 5, "majorTick": "cross"})),
+                ("chart.format.axis", json!({"axis": "value", "reverse": true, "logBase": 10})),
+            ],
+        ),
+        (
+            "pieOfPie",
+            vec![
+                ("chart.format.point", json!({"point": 1, "fill": "#FF0000"})),
+                ("chart.format.series", json!({"series": 0, "line": {"color": "#FFFFFF", "width": 2}})),
+                ("chart.format.labels", json!({"percent": true, "position": "outsideEnd"})),
+            ],
+        ),
+        (
+            "explodedDoughnut",
+            vec![
+                ("chart.format.options", json!({"firstSliceAngle": 45, "holeSize": 40})),
+                ("chart.format.point", json!({"point": 2, "explosion": 30})),
+            ],
+        ),
+        (
+            "column3d",
+            vec![
+                ("chart.format.series", json!({"series": 1, "fill": "accent6", "line": {"color": "#000000", "width": 1}})),
+                ("chart.format.options", json!({"gapWidth": 80})),
+                ("chart.format.axis", json!({"axis": "value", "min": 0, "max": 8, "majorUnit": 2})),
+            ],
+        ),
+        (
+            "columnLineSecondary",
+            vec![
+                ("chart.format.series", json!({"series": 0, "fill": gradient, "invertIfNegative": true})),
+                (
+                    "chart.format.series",
+                    json!({"series": 2, "line": {"color": "#00B050", "width": 3, "dash": "lgDash"}, "marker": "square", "markerSize": 8}),
+                ),
+                ("chart.format.options", json!({"overlap": 20, "gapWidth": 100})),
+                ("chart.format.axis", json!({"axis": "category", "reverse": true})),
+            ],
+        ),
+        ("bubble", vec![("chart.format.series", json!({"series": 0, "fill": "#FFC000", "line": {"color": "#7F6000", "width": 1}}))]),
+    ];
+    for (kind, extra) in cases {
+        let mut cmds = vec![
+            ("chart.format.element", json!({"element": "title", "font": {"size": 20, "bold": true, "color": "#C00000"}})),
+            ("chart.format.legend", json!({"position": "left"})),
+            ("chart.format.element", json!({"element": "legend", "font": {"italic": true}})),
+            ("chart.format.element", json!({"element": "chartArea", "fill": "#FFF8EE", "line": {"color": "accent2", "width": 1.5, "dash": "dash"}})),
+            ("chart.format.labels", json!({"show": true, "numFmt": "0.0"})),
+        ];
+        cmds.extend(extra);
+        let s = formatted(kind, &cmds);
+        let (before, after, xml) = round_trip(&s);
+        let mut diffs = vec![];
+        json_diff(&looks(&before), &looks(&after), "", &mut diffs);
+        assert!(
+            diffs.is_empty(),
+            "{kind}: {diffs:?}
+{xml}"
+        );
+        assert_eq!((after.kind, &after.variant), (before.kind, &before.variant), "{kind}: {xml}");
+        let axes = |c: &Chart| c.series.iter().map(|s| (s.kind, s.secondary_axis)).collect::<Vec<_>>();
+        assert_eq!(axes(&after), axes(&before), "{kind}: {xml}");
+    }
+}
+
+/// The paths where two JSON values differ, with both sides.
+fn json_diff(a: &Value, b: &Value, path: &str, out: &mut Vec<String>) {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            for k in x.keys().chain(y.keys().filter(|k| !x.contains_key(*k))) {
+                json_diff(x.get(k).unwrap_or(&Value::Null), y.get(k).unwrap_or(&Value::Null), &format!("{path}.{k}"), out);
+            }
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                json_diff(p, q, &format!("{path}[{i}]"), out);
+            }
+        }
+        _ if a != b => out.push(format!("{path}: {a} -> {b}")),
+        _ => {}
+    }
 }
