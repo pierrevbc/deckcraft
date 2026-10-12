@@ -1034,10 +1034,8 @@ fn insert(app: &mut SlideApp, ui: &mut Ui) {
         big(app, ui, Icon::SmartArt, "SmartArt", "app.dialog", json!({"id": "smartart"}));
         let r = big_button(ui, Icon::Chart, "Chart", enabled(app, "insert.chart"));
         egui::Popup::menu(&r).show(|ui| {
-            for k in deckcraft_model::chart::ChartType::MAIN {
-                if ui.button(k.label()).clicked() {
-                    run(app, "insert.chart", json!({"type": format!("{k:?}")}));
-                }
+            if let Some(p) = chart_gallery(ui, None) {
+                run(app, "insert.chart", json!({"type": p.id}));
             }
         });
     });
@@ -2288,6 +2286,24 @@ fn table_layout(app: &mut SlideApp, ui: &mut Ui) {
     arrange_group(app, ui);
 }
 
+/// The chart type gallery: a submenu per family (Column, Bar, Pie…) listing its types and
+/// variants, the current one checked. Returns the one picked.
+fn chart_gallery(ui: &mut Ui, current: Option<&deckcraft_model::Chart>) -> Option<&'static deckcraft_model::chart::ChartPreset> {
+    use deckcraft_model::chart::ChartPreset;
+    let mut picked = None;
+    for family in ChartPreset::FAMILIES {
+        ui.menu_button(family, |ui| {
+            for p in ChartPreset::family(family) {
+                if ui.selectable_label(current.is_some_and(|c| p.matches(c)), p.label).clicked() {
+                    picked = Some(p);
+                    ui.close();
+                }
+            }
+        });
+    }
+    picked
+}
+
 fn chart_design(app: &mut SlideApp, ui: &mut Ui) {
     let ch = app.session.active().and_then(|d| {
         d.selected_shapes().into_iter().find_map(|s| if let ShapeKind::Chart(c) = &s.kind { Some(((**c).clone(), s.id)) } else { None })
@@ -2295,12 +2311,10 @@ fn chart_design(app: &mut SlideApp, ui: &mut Ui) {
     group(ui, |ui| {
         let r = big_button(ui, Icon::ChangeChartType, "Change\nChart Type", ch.is_some());
         egui::Popup::menu(&r).show(|ui| {
-            for k in deckcraft_model::chart::ChartType::MAIN {
-                if ui.button(k.label()).clicked() {
-                    if let Some((_, id)) = &ch {
-                        let _ = app.run("chart.type", json!({"id": id.0, "type": format!("{k:?}")}));
-                    }
-                }
+            if let Some(p) = chart_gallery(ui, ch.as_ref().map(|(c, _)| c))
+                && let Some((_, id)) = &ch
+            {
+                let _ = app.run("chart.type", json!({"id": id.0, "type": p.id}));
             }
         });
         big(app, ui, Icon::EditData, "Edit\nData", "app.dialog", json!({"id": "chartData"}));

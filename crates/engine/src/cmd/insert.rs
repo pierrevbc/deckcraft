@@ -2,7 +2,7 @@
 
 use deckcraft_color::SchemeSlot;
 use deckcraft_geom::Xfrm;
-use deckcraft_model::chart::ChartType;
+use deckcraft_model::chart::{ChartPreset, ChartType};
 use deckcraft_model::style::PictureFill;
 use deckcraft_model::text::{AutoFit, RunKind, TextBody};
 use deckcraft_model::{Chart, ColorRef, Fill, Geom, MediaClip, Shape, ShapeId, ShapeKind, ShapeStyle, Table};
@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart…",
             ["Insert", "Illustrations"],
             None,
-            "{type?: column|bar|line|pie|doughnut|area|scatter|stackedColumn|…, rect?, categories?: [..], series?: [{name, values}]}",
+            "{type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|stock|columnLine|… (a ChartPreset id: stackedColumn, column3d, explodedPie, pieOfPie, lineSmooth, stockOhlc…), rect?, categories?: [..], series?: [{name, values}]}",
             has_slide,
             chart
         ),
@@ -396,6 +396,9 @@ fn table(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn chart_type(name: &str) -> ChartType {
+    if let Some(p) = ChartPreset::find(name) {
+        return p.kind;
+    }
     match name.to_ascii_lowercase().replace(['-', '_', ' '], "").as_str() {
         "bar" | "clusteredbar" => ChartType::Bar,
         "stackedbar" => ChartType::StackedBar,
@@ -427,9 +430,27 @@ pub fn chart_type(name: &str) -> ChartType {
     }
 }
 
+/// Make `c` a chart of type or preset `name` (see [`ChartPreset`]), keeping its data.
+fn set_chart_type(c: &mut Chart, name: &str) {
+    if let Some(p) = ChartPreset::find(name) {
+        p.apply(c);
+        return;
+    }
+    let k = chart_type(name);
+    c.kind = k;
+    c.vary_colors = k.is_pie() || c.series.len() == 1 && c.vary_colors;
+    c.variant.three_d = None;
+    if k == ChartType::Combo
+        && c.series.iter().all(|s| s.kind.is_none())
+        && let Some(p) = ChartPreset::find("columnLine")
+    {
+        p.apply(c);
+    }
+}
+
 fn chart(s: &mut Session, p: &Value) -> Result<Value> {
-    let kind = chart_type(str_param(p, "type").unwrap_or("column"));
-    let mut c = Chart::sample(kind);
+    let name = str_param(p, "type").unwrap_or("column");
+    let mut c = Chart::sample(chart_type(name));
     if let Some(cats) = p.get("categories").and_then(Value::as_array) {
         c.categories = cats.iter().map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).collect();
     }
@@ -446,6 +467,7 @@ fn chart(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(t) = p.get("title") {
         c.title = t.as_str().map(String::from);
     }
+    set_chart_type(&mut c, name);
     let size = s.doc()?.doc.slide_size;
     let rect = rect_param(p, "rect").unwrap_or(Xfrm::new(size.width * 0.15, size.height * 0.15, size.width * 0.7, size.height * 0.7));
     let id = add_shape(s, Shape { xfrm: Some(rect), kind: ShapeKind::Chart(Box::new(c)), ..Default::default() }, true)?;
@@ -644,10 +666,9 @@ fn with_chart(s: &mut Session, p: &Value, cmd: &str, f: impl Fn(&mut Chart) -> R
 }
 
 fn chart_type_cmd(s: &mut Session, p: &Value) -> Result<Value> {
-    let k = chart_type(str_param(p, "type").unwrap_or("column"));
+    let name = str_param(p, "type").unwrap_or("column");
     with_chart(s, p, "chart.type", |c| {
-        c.kind = k;
-        c.vary_colors = matches!(k, ChartType::Pie | ChartType::Doughnut) || c.series.len() == 1 && c.vary_colors;
+        set_chart_type(c, name);
         c.raw = None;
         Ok(())
     })
