@@ -9,13 +9,13 @@ use crate::{DocState, EngineError, Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Presentation", ["File"], Some("Cmd+N"), "{theme?: name, size?: [w,h] pt, blank?: bool}", always, new),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path}", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path: file, .deck folder or its deck.json}", always, open),
         cmd!(noundo "file.openBytes", "Open Data", [], None, "{name, data: base64}", always, open_bytes),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, format?: deckcraft|pptx}", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, format?}", has_doc, save_as),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, format?: deckcraft|pptx|deck} → {path, bytes} or, for a .deck folder, {path, written, removed, warnings}", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, format?: deckcraft|pptx|deck|outline}", has_doc, save_as),
         cmd!(noundo "file.saveTemplate", "Save as Template…", ["File"], None, "{path}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Save to Data", [], None, "{format?: deckcraft|pptx} → {data: base64}", has_doc, save_bytes_cmd),
-        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, vector?, dpi?, slides?: [index] | \"1-3,5\", includeHidden?, textLayer?, frame?}", has_doc, export),
+        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|deck|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, vector?, dpi?, slides?: [index] | \"1-3,5\", includeHidden?, textLayer?, frame?}", has_doc, export),
         cmd!(
             query "file.info",
             "Info",
@@ -97,6 +97,12 @@ pub fn add_opened(s: &mut Session, name: &str, path: Option<String>, p: Presenta
 #[cfg(not(target_arch = "wasm32"))]
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.open", "missing `path`"))?;
+    if let Some(dir) = crate::folder::folder_to_open(path) {
+        let doc = crate::folder::open(&dir)?;
+        let dir = dir.to_string_lossy().to_string();
+        let i = add_opened(s, &dir, Some(dir.clone()), doc);
+        return Ok(json!({"document": i, "slides": s.doc()?.doc.slides.len()}));
+    }
     let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let doc = open_presentation(path, &bytes)?;
     let native = deckcraft_format::sniff(&bytes) || deckcraft_pptx::sniff(&bytes);
@@ -120,6 +126,7 @@ fn open_bytes(s: &mut Session, p: &Value) -> Result<Value> {
 /// Encode the presentation in `format` (`deckcraft`, `pptx`, `outline`).
 pub fn save_bytes(doc: &Presentation, format: &str) -> Result<Vec<u8>> {
     match format {
+        "deck" => Err(EngineError::Other("a .deck presentation is a folder: save it to a path (file.saveAs)".into())),
         "pptx" | "potx" | "ppsx" => deckcraft_pptx::export(doc).map_err(|e| EngineError::Other(e.to_string())),
         "outline" | "txt" => Ok(deckcraft_format::slides_to_outline(doc).into_bytes()),
         "pdf" => deckcraft_pdf::export(doc, &Default::default()).map_err(|e| EngineError::Other(e.to_string())),
@@ -185,7 +192,9 @@ pub fn pdf_bytes(doc: &Presentation, p: &Value) -> Result<Vec<u8>> {
 
 pub fn format_for_path(path: &str) -> &'static str {
     let l = path.to_ascii_lowercase();
-    if l.ends_with(".pptx") || l.ends_with(".potx") || l.ends_with(".ppsx") {
+    if crate::folder::is_folder_path(path) {
+        "deck"
+    } else if l.ends_with(".pptx") || l.ends_with(".potx") || l.ends_with(".ppsx") {
         "pptx"
     } else if l.ends_with(".png") {
         "png"
@@ -233,10 +242,29 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"needsPath": true}));
     };
     let format = str_param(p, "format").unwrap_or(format_for_path(&path));
+    if format == "deck" {
+        let saved = save_folder(&s.doc()?.doc, &path)?;
+        mark_saved(s, Some(path.clone()))?;
+        return Ok(saved);
+    }
     let bytes = save_bytes(&s.doc()?.doc, format)?;
     write_file(&path, &bytes)?;
     mark_saved(s, Some(path.clone()))?;
     Ok(json!({"path": path, "bytes": bytes.len()}))
+}
+
+/// Save `doc` as a `.deck` folder at `path`.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_folder(doc: &Presentation, path: &str) -> Result<Value> {
+    let saved = crate::folder::save(std::path::Path::new(path), doc)?;
+    for w in &saved.warnings {
+        log::info!("{path}: {w}");
+    }
+    Ok(json!({"path": path, "written": saved.written, "removed": saved.removed, "warnings": saved.warnings}))
+}
+#[cfg(target_arch = "wasm32")]
+fn save_folder(_doc: &Presentation, _path: &str) -> Result<Value> {
+    Err(EngineError::Other("saving a .deck folder is not available in the browser: save a .deckcraft file instead".into()))
 }
 
 fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
@@ -311,6 +339,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             write_file(&path, &bytes)?;
             Ok(json!({"path": path, "bytes": bytes.len()}))
         }
+        "deck" => save_folder(&st.doc, &path),
         other => {
             let bytes = save_bytes(&st.doc, other)?;
             write_file(&path, &bytes)?;
