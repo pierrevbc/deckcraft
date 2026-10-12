@@ -1,6 +1,6 @@
 # DeckCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (core-workflow alpha gate added; stage stays alpha; previous: major, created; milestones carried from the local execution plan, the beta plan built from gaps.md) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (vector PDF landed; previous: minor, core-workflow alpha gate added; stage stays alpha; previous: major, created; milestones carried from the local execution plan, the beta plan built from gaps.md) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Forward-looking: where DeckCraft is going and in what order. The one-page summary is
 [ROADMAP.md](../ROADMAP.md); every shortfall is in [gaps.md](gaps.md); numbers are in
@@ -19,7 +19,7 @@ points and lead the beta plan.
 | Open a colleague's `.pptx`, edit it, save it back as `.pptx` that PowerPoint opens | partial (not blocking) | The reader is lenient and keeps unknown objects. Files open in PowerPoint without repair (checked 2026-10-06). But only generated decks have been tested; text inside EMF/WMF pictures is missing; comment threads, media options and rewind are lost (#70, #74, #77) | 31–55 |
 | Present: full-screen show with transitions, animations, media, presenter view with notes, next slide and timer | yes | 48/48 transitions, 64 effects, triggers, builds, media playback, presenter window. Presenter view isn't placed on the second display automatically (drag it there) | 3–5 |
 | Add business content: tables, charts with their data, simple diagrams | partial (not blocking) | Tables with styles, merge/split, all D or P. Charts insert with the common types and edit data in the Chart Data dialog (P0 partial); SmartArt is basic (pre-drawn shapes) | 12–20 |
-| Share the deck: PDF of slides, notes or handouts; images | yes | `file.export` PDF with text layer, links, bookmarks, handouts 1–9; PNG/JPEG. Artwork is raster in the PDF; no direct print (print the PDF) | 10–16 |
+| Share the deck: PDF of slides, notes or handouts; images | yes | `file.export` PDF: vector artwork, real text, links, bookmarks, handouts 1–9; PNG/JPEG. No direct print (print the PDF) | 5–8 |
 | Review: comments with replies, resolve, spelling | partial (not blocking) | Comments, replies and resolve work and survive `.deckcraft`; threads are flattened on `.pptx` save (#70); spelling is a small built-in list | 4–8 |
 
 ## Current focus (2026-10-10)
@@ -42,7 +42,7 @@ Beta means ~75% ready for real work and opening and saving PowerPoint's `.pptx` 
 | 2 | PPTX real-deck corpus and fixes | 20–35 | File formats 58 → 75% |
 | 3 | PPTX round-trip losses (#70, #74, #77), `.potx`/`.ppsx`/`.pptm` content types, embedded fonts | 8–15 | File formats → 80% |
 | 4 | EMF/WMF and SVG pictures | 8–14 | File formats, Pictures |
-| 5 | Vector PDF, printing | 10–16 | File formats, Files |
+| 5 | Printing (vector PDF landed 2026-10-12) | 5–8 | File formats, Files |
 | 6 | Localization infrastructure + zh-Hans, es, fr, de, ja (with IME) | 27–46 | Localization 8 → ~40% |
 | 7 | Font weights (#69), image paste (#53), Tab in text (#78) | 6–11 | Features |
 | 8 | Charts: data grid, elements | 6–10 | Features |
@@ -109,5 +109,6 @@ plan above.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Vector PDF landed: the share row and beta item 5 now cover printing only |
 | 2026-10-10 | minor | Added the alpha gate (six core workflows): all pass, two with partial depth; stage stays alpha |
 | 2026-10-10 | major | Created: current focus, ranked beta plan with hours, milestones M0–M14 with status, the old alpha checklist as history |

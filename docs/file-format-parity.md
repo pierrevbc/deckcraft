@@ -1,6 +1,6 @@
 # File-format parity with PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (SmartArt text follows `dsp:txXfrm`; previous: minor, chart workbooks kept and updated) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (PDF export is vector; previous: minor, SmartArt text follows `dsp:txXfrm`) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every format PowerPoint reads or writes, DeckCraft's support, fidelity and how it is tested.
 Gaps are itemized in [gaps.md](gaps.md#file-formats). Dimension score: **~58% ready**
@@ -24,7 +24,7 @@ PowerPoint opens and saves; Viewer = opens only).
 | `.odp` OpenDocument | Editor | no | no | | none |
 | `.thmx` Office theme | Viewer | no | no | Browse for themes is a P2 row | none |
 | `.deckcraft` native (zip + JSON) | n/a | yes (also `.slidecraft`) | yes | Lossless for the DeckCraft model, forward compatible | `crates/format` tests |
-| PDF | export | no | yes | Slides, notes pages, handouts (1–9); real-text layer with embedded subsets, links, bookmarks. Slide artwork is a raster image at print resolution, not vector | `crates/pdf` tests |
+| PDF | export | no | yes | Slides, notes pages, handouts (1–9), links, bookmarks. Vector: shapes, outlines, gradients, transparency, tables and charts as PDF paths; real text in embedded font subsets; JPEG/PNG pictures embedded as they are. Shapes with shadow, glow, soft edges or reflection, and pattern fills, rasterize alone at `dpi`; `vector: false` keeps whole-slide rasters | `crates/pdf` tests |
 | Outline `.rtf` / `.txt` | export (RTF), import (outline) | `.txt`/`.md` outline (`slide.fromOutline`) | `.txt` outline | No RTF | engine tests |
 | PNG / JPEG slide images | export | n/a | yes (`file.export`, `deckcraft-cli render`) | Matches the editor's renderer | render tests |
 | TIFF / BMP / GIF slide images | export | n/a | no | Easy (the `image` crate writes them) | none |
@@ -99,6 +99,7 @@ the round trip even though DeckCraft doesn't model it.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | PDF export draws slides as vectors and real text through the renderer's canvas; effects and patterns rasterize per element |
 | 2026-10-12 | minor | SmartArt import lays each shape's text out on its `dsp:txXfrm` text rectangle instead of the shape box |
 | 2026-10-12 | minor | Chart workbooks survive PPTX export: kept byte for byte, changed cells updated in place, or generated for new charts |
 | 2026-10-12 | minor | EMF/WMF text and pattern brushes drawn; OLE (VML) and ActiveX previews read |

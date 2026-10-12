@@ -1,6 +1,6 @@
 # DeckCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main at d556ff9; AGENTS.md §4 keeps the rules) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (renderer canvas, vector PDF; previous: major, created from the code on main at d556ff9; AGENTS.md §4 keeps the rules) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 How DeckCraft is built today. The binding rules (layering, everything is a command, thin UI, never
 break wasm, never crash) are in [AGENTS.md](../AGENTS.md) §3–§5; this document describes what
@@ -51,8 +51,11 @@ Programmatic calls never open dialogs. Pointer gestures go through `Session::poi
 The renderer draws a slide to an RGBA pixmap on the CPU; the UI uploads it as an egui texture.
 Transitions are layers of textured quads over the old and new slide images (fake 3-D from
 trapezoids). The show window and the presenter view are egui viewports; animation state per shape
-comes from `anim::timeline` each frame. PDF export renders each slide at print resolution and
-overlays an invisible real-text layer with embedded font subsets.
+comes from `anim::timeline` each frame. The renderer draws through a small `Canvas` trait
+(`crates/render/src/canvas.rs`): `vello_cpu` for pixels, and a krilla canvas in `crates/pdf` that
+writes PDF paths, paints, pictures and real text. Shapes with blur-based effects and pattern fills
+reach a vector canvas as a pixmap of that element alone; `vector: false` keeps the older
+whole-slide raster with an invisible text layer.
 
 ## File I/O
 
@@ -74,4 +77,5 @@ macOS, Windows, Linux, FreeBSD and web artifacts.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Renderer draws through a `Canvas` trait; the PDF export is a vector canvas |
 | 2026-10-10 | major | Created from the code on main (d556ff9) and AGENTS.md §4 |
