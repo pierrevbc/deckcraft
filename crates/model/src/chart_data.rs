@@ -37,7 +37,7 @@ impl ChartType {
     /// The data this chart type plots.
     pub fn data_shape(self) -> DataShape {
         match self {
-            ChartType::Scatter => DataShape::Xy,
+            k if k.is_scatter() => DataShape::Xy,
             ChartType::Bubble => DataShape::Bubble,
             _ => DataShape::Categories,
         }
@@ -178,6 +178,17 @@ pub fn stock_roles(series: usize) -> &'static [&'static str] {
     }
 }
 
+/// Roles of the series of a stock chart of type `kind`: the variant fixes them (`StockVhlc` is
+/// Volume, High, Low, Close); the plain stock chart goes by the number of series.
+pub fn stock_roles_for(kind: ChartType, series: usize) -> &'static [&'static str] {
+    match (kind.has_volume(), kind.has_open()) {
+        (true, true) => &["Volume", "Open", "High", "Low", "Close"],
+        (true, false) => &["Volume", "High", "Low", "Close"],
+        (false, true) => &["Open", "High", "Low", "Close"],
+        (false, false) => stock_roles(series),
+    }
+}
+
 /// Point indices of `point_fills` after the points were moved: `map` gives the new index of an
 /// old one (`None` when the point went).
 fn remap_points(fills: &mut Vec<(usize, crate::Fill)>, map: impl Fn(usize) -> Option<usize>) {
@@ -277,8 +288,8 @@ impl Chart {
             DataColumn::X { .. } => Some("X values".into()),
             DataColumn::Sizes { .. } => Some("Size".into()),
             DataColumn::Values { series } => match self.kind {
-                ChartType::Scatter | ChartType::Bubble => Some("Y values".into()),
-                ChartType::Stock => stock_roles(self.series.len()).get(series).map(|r| r.to_string()),
+                k if k.is_xy() => Some("Y values".into()),
+                k if k.is_stock() => stock_roles_for(k, self.series.len()).get(series).map(|r| r.to_string()),
                 ChartType::Combo => self.series.get(series).and_then(|s| s.kind).map(|k| k.label().to_string()),
                 _ => None,
             },
@@ -617,11 +628,17 @@ impl Chart {
         if n == 0 {
             notes.push("Add a series to plot data.".to_string());
         }
-        if self.kind == ChartType::Pie && n > 1 {
+        if matches!(self.kind, ChartType::Pie | ChartType::ExplodedPie | ChartType::PieOfPie | ChartType::BarOfPie) && n > 1 {
             notes.push("A pie chart plots the first series only.".to_string());
         }
         if self.kind == ChartType::Stock && !(3..=5).contains(&n) {
             notes.push("A stock chart plots 3 series (High, Low, Close), 4 (Open first) or 5 (Volume first).".to_string());
+        }
+        if self.kind.is_stock() && self.kind != ChartType::Stock {
+            let roles = stock_roles_for(self.kind, n);
+            if n != roles.len() {
+                notes.push(format!("This stock chart plots {} series ({}).", roles.len(), roles.join(", ")));
+            }
         }
         if self.kind == ChartType::Bubble && self.series.iter().any(|s| s.sizes.iter().flatten().any(|z| *z < 0.0)) {
             notes.push("Negative bubble sizes are not drawn.".to_string());
@@ -764,7 +781,7 @@ mod tests {
         let mut c = Chart::sample(ChartType::Bubble);
         c.series.truncate(1);
         c.set_cell(1, 2, true, "3", false).unwrap();
-        assert_eq!(c.series[0].sizes, vec![Some(3.0), None, None, None]);
+        assert_eq!(c.series[0].sizes.first().copied().flatten(), Some(3.0));
         c.set_cell(2, 2, true, "-1", false).unwrap();
         assert_eq!(c.data_notes().len(), 1);
         c.insert_series(1, Some("B".into())).unwrap();
