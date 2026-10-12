@@ -1538,3 +1538,33 @@ fn chart_first_five_types_and_gridcraft_flow() {
     assert!(csv_content.contains("Jan,12.5,8"));
     let _ = std::fs::remove_file(temp_csv);
 }
+
+/// Every gallery entry inserts its type and variant, and turns an existing chart into it.
+#[test]
+fn chart_gallery_types_insert_and_change() {
+    use deckcraft_model::chart::{ChartPreset, ChartType};
+    let chart_of = |s: &Session, id: u64| match &s.doc().unwrap().shape(deckcraft_model::ShapeId(id as u32)).unwrap().kind {
+        deckcraft_model::ShapeKind::Chart(c) => (**c).clone(),
+        _ => panic!("not a chart"),
+    };
+    let mut s = session();
+    let target = s.execute("insert.chart", &json!({"type": "column"})).unwrap()["id"].as_u64().unwrap();
+    for p in ChartPreset::GALLERY {
+        let id = s.execute("insert.chart", &json!({"type": p.id})).unwrap()["id"].as_u64().unwrap();
+        let c = chart_of(&s, id);
+        assert!(p.matches(&c), "insert.chart {}: {:?} {:?}", p.id, c.kind, c.variant);
+        s.execute("chart.type", &json!({"id": target, "type": p.id})).unwrap();
+        let c = chart_of(&s, target);
+        assert!(p.matches(&c), "chart.type {}: {:?} {:?}", p.id, c.kind, c.variant);
+        assert!(c.raw.is_none());
+    }
+    // The type names the ribbon used before the gallery still work.
+    for (name, kind) in [("StackedColumn", ChartType::StackedColumn), ("LineMarkers", ChartType::LineMarkers), ("donut", ChartType::Doughnut)] {
+        s.execute("chart.type", &json!({"id": target, "type": name})).unwrap();
+        assert_eq!(chart_of(&s, target).kind, kind, "{name}");
+    }
+    // A combo chart without series types gets a column-line layout.
+    s.execute("chart.type", &json!({"id": target, "type": "combo"})).unwrap();
+    let c = chart_of(&s, target);
+    assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), [Some(ChartType::Column), Some(ChartType::Column), Some(ChartType::Line)]);
+}
