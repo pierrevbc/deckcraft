@@ -1449,3 +1449,91 @@ fn tables_with_a_file_defined_style_edit_and_resize() {
     assert_eq!(table_of(&s, id).cols, vec![230.0, 170.0]);
     assert_eq!(text_sel(&s).unwrap().cell, Some((1, 1)));
 }
+
+#[test]
+fn chart_first_five_types_and_gridcraft_flow() {
+    let mut s = session();
+
+    // 1. Test inserting each of the first five chart types from Image #3
+    for kind in ["column", "bar", "line", "area", "pie"] {
+        s.ui_requests.clear();
+        let r = s.execute("insert.chart", &json!({"type": kind})).unwrap();
+        let id = r["id"].as_u64().unwrap();
+        assert!(id > 0);
+
+        // Verify that insert.chart automatically requests the chartData dialog (GridCraft editor)
+        assert!(
+            s.ui_requests.iter().any(|req| matches!(req, UiRequest::Dialog { id: d_id, .. } if d_id == "chartData")),
+            "insert.chart should request chartData dialog for {kind}"
+        );
+
+        let st = s.doc().unwrap();
+        let sh = st.shape(deckcraft_model::ShapeId(id as u32)).unwrap();
+        assert!(matches!(sh.kind, deckcraft_model::ShapeKind::Chart(_)), "should be a chart shape for {kind}");
+    }
+
+    // 2. Test chart.title command
+    let chart_id = s.doc().unwrap().current_slide().unwrap().shapes.last().unwrap().id.0;
+    s.execute("edit.select", &json!({"ids": [chart_id]})).unwrap();
+    s.execute("chart.title", &json!({"id": chart_id, "title": "Quarterly Performance"})).unwrap();
+    let st = s.doc().unwrap();
+    let sh = st.shape(deckcraft_model::ShapeId(chart_id)).unwrap();
+    let deckcraft_model::ShapeKind::Chart(c) = &sh.kind else { panic!("not chart") };
+    assert_eq!(c.title.as_deref(), Some("Quarterly Performance"));
+
+    // 3. Test chart.data command with custom categories, series, and title
+    let new_cats = vec!["Jan", "Feb", "Mar"];
+    let new_series = vec![
+        json!({"name": "Product A", "values": [12.5, 18.0, 24.3]}),
+        json!({"name": "Product B", "values": [8.0, 14.2, 19.5]}),
+    ];
+    s.execute("chart.data", &json!({
+        "id": chart_id,
+        "title": "Q1 Product Sales",
+        "categories": new_cats,
+        "series": new_series
+    })).unwrap();
+
+    let st = s.doc().unwrap();
+    let sh = st.shape(deckcraft_model::ShapeId(chart_id)).unwrap();
+    let deckcraft_model::ShapeKind::Chart(c) = &sh.kind else { panic!("not chart") };
+    assert_eq!(c.title.as_deref(), Some("Q1 Product Sales"));
+    assert_eq!(c.categories, vec!["Jan", "Feb", "Mar"]);
+    assert_eq!(c.series[0].name, "Product A");
+    assert_eq!(c.series[0].values, vec![Some(12.5), Some(18.0), Some(24.3)]);
+
+    // 4. Test switching between all first five chart types via chart.type
+    for (t_name, expected_kind) in [
+        ("bar", deckcraft_model::chart::ChartType::Bar),
+        ("line", deckcraft_model::chart::ChartType::Line),
+        ("area", deckcraft_model::chart::ChartType::Area),
+        ("pie", deckcraft_model::chart::ChartType::Pie),
+        ("column", deckcraft_model::chart::ChartType::Column),
+    ] {
+        s.execute("chart.type", &json!({"id": chart_id, "type": t_name})).unwrap();
+        let st = s.doc().unwrap();
+        let sh = st.shape(deckcraft_model::ShapeId(chart_id)).unwrap();
+        let deckcraft_model::ShapeKind::Chart(c) = &sh.kind else { panic!("not chart") };
+        assert_eq!(c.kind, expected_kind, "chart type should match {t_name}");
+    }
+
+    // 5. Test double click on chart opens chartData dialog
+    s.ui_requests.clear();
+    let xfrm = s.doc().unwrap().shape(deckcraft_model::ShapeId(chart_id)).unwrap().xfrm.unwrap();
+    let ev = |kind, x: f64, y: f64| tools::PointerEvent { kind, x, y, mods: Default::default(), tol: 3.0 };
+    s.pointer(ev(tools::PointerKind::DoubleClick, xfrm.x + 20.0, xfrm.y + 20.0)).unwrap();
+    assert!(
+        s.ui_requests.iter().any(|req| matches!(req, UiRequest::Dialog { id: d_id, .. } if d_id == "chartData")),
+        "double clicking chart must trigger chartData dialog"
+    );
+
+    // 6. Test chart.gridcraft command exports CSV data
+    let temp_csv = std::env::temp_dir().join("test_chart_export.csv");
+    let gr = s.execute("chart.gridcraft", &json!({"id": chart_id, "path": temp_csv.to_string_lossy()})).unwrap();
+    assert!(gr["path"].as_str().is_some());
+    assert!(temp_csv.exists(), "chart.gridcraft must write CSV file");
+    let csv_content = std::fs::read_to_string(&temp_csv).unwrap();
+    assert!(csv_content.contains("Category,Product A,Product B"));
+    assert!(csv_content.contains("Jan,12.5,8"));
+    let _ = std::fs::remove_file(temp_csv);
+}

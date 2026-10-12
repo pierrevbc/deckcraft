@@ -128,6 +128,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | What landed |
 |---|---|
+| 2026-10-11 | Interactive GridCraft spreadsheet data editor for charts; live chart sync on cell edit; chart title and elements options; CSV export / GridCraft launcher; full support and test coverage for the first five chart types (Clustered Column, Clustered Bar, Line, Area, Pie) |
 | 2026-10-12 | Tables: the caret and text selection show in the cell being edited; clicks and double-clicks place the caret in the clicked cell (and select the word); dragging inner column borders, the right edge and row borders resizes them in one undo step; Tab skips cells hidden under a merge |
 | 2026-10-12 | Title bar: Export button next to Save, opening the Export dialog on every platform (a shortcut beside File › Export) |
 | 2026-10-12 | Vector PDF export: shapes, gradients, transparency, tables and charts as PDF paths, real text in font subsets, pictures embedded as they are; effects and patterns rasterize per element (`vector: false` keeps the raster mode) |

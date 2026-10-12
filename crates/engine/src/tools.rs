@@ -857,6 +857,10 @@ impl Session {
                 let st = self.doc()?;
                 let Some(sh) = st.shape(id).cloned() else { return Ok(Value::Null) };
                 match &sh.kind {
+                    ShapeKind::Chart(_) => {
+                        self.ui_requests.push(crate::UiRequest::Dialog { id: "chartData".into(), params: json!({"id": id.0}) });
+                        Ok(Value::Null)
+                    }
                     ShapeKind::Table(_) | ShapeKind::Shape | ShapeKind::Connector { .. } if !sh.is_line() => {
                         // Caret at the double-click (in a table, in the clicked cell), then select
                         // the word there.

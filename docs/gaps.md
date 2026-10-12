@@ -137,11 +137,10 @@ Detail in [file-format-parity.md](file-format-parity.md).
 - **Estimate:** 1–2 h.
 
 ### Charts: data grid, elements and the newer chart types
-- **Evidence:** checklist rows "Edit chart data" (P0, partial), "Chart elements" (partial), "Other
-  chart types" (partial); `chartex` parts (waterfall, funnel, treemap, sunburst, histogram, box &
-  whisker) aren't read.
-- **Impact:** most business decks have charts; editing their data is routine.
-- **Estimate:** 12–20 h. Data and elements are **beta blockers** (6–10 h).
+- **Status (2026-10-11):** Data grid editing via interactive GridCraft spreadsheet window landed; live sync, CSV exchange, chart elements (title, legend, labels, gridlines), and primary chart types (Clustered Column, Clustered Bar, Line, Area, Pie) completed. `chartex` parts remain open.
+- **Evidence:** checklist rows "Edit chart data" (P0, Done), "Chart elements" (P1, Done), "Other chart types" (partial); `chartex` parts (waterfall, funnel, treemap, sunburst, histogram, box & whisker) aren't read.
+- **Impact:** most business decks have charts; editing their data is now supported directly with live sync.
+- **Estimate:** 6–10 h remaining for `chartex` parts. Data and elements are no longer blocking.
 
 ### SmartArt is pre-drawn shapes only
 - **Evidence:** `crates/pptx/src/read/shapes.rs` reads SmartArt's drawing part as a group; no text

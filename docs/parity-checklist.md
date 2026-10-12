@@ -173,8 +173,8 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Tables | Keyboard navigation between cells | P0 | D |
 | Charts | Insert chart (column, bar, line, area, pie, doughnut, scatter) | P0 | D |
 | Charts | Other chart types (radar, stock, combo, waterfall, funnel, treemap, sunburst, histogram, box) | P2 | P |
-| Charts | Edit chart data | P0 | P |
-| Charts | Chart elements (title, legend, labels, axes, gridlines) | P1 | P |
+| Charts | Edit chart data | P0 | D |
+| Charts | Chart elements (title, legend, labels, axes, gridlines) | P1 | D |
 | Charts | Chart styles and colours | P2 | P |
 | SmartArt | Insert SmartArt (lists, processes, cycles, hierarchy) | P1 | P |
 | SmartArt | Text pane and layout switching | P2 | M |

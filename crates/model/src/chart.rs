@@ -39,6 +39,14 @@ pub enum ChartType {
 }
 
 impl ChartType {
+    /// The first five primary chart types: Clustered Column, Clustered Bar, Line, Area, Pie.
+    pub const FIRST_FIVE: [ChartType; 5] = [
+        ChartType::Column,
+        ChartType::Bar,
+        ChartType::Line,
+        ChartType::Area,
+        ChartType::Pie,
+    ];
     pub const MAIN: [ChartType; 12] = [
         ChartType::Column,
         ChartType::Bar,
@@ -283,6 +291,108 @@ impl Chart {
         }
         (self.y_min.unwrap_or(lo), self.y_max.unwrap_or(hi))
     }
+
+    /// Exports the chart's categories, series names, and values to CSV for GridCraft spreadsheet exchange.
+    pub fn to_csv(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Category");
+        for s in &self.series {
+            out.push(',');
+            out.push_str(&csv_escape(&s.name));
+        }
+        out.push('\n');
+        let n = self.categories.len().max(self.series.iter().map(|s| s.values.len()).max().unwrap_or(0));
+        for i in 0..n {
+            let cat = self.categories.get(i).map(String::as_str).unwrap_or("");
+            out.push_str(&csv_escape(cat));
+            for s in &self.series {
+                out.push(',');
+                if let Some(Some(v)) = s.values.get(i) {
+                    if (v - v.round()).abs() < 1e-9 && v.abs() < 1e15 {
+                        out.push_str(&format!("{}", v.round() as i64));
+                    } else {
+                        out.push_str(&format!("{v}"));
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Loads categories, series names, and numerical values from CSV text (GridCraft exchange).
+    pub fn load_csv(&mut self, text: &str) -> Result<(), String> {
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let Some(first) = lines.first() else {
+            return Err("empty CSV".into());
+        };
+        let header = parse_csv_line(first);
+        let Some(series_names) = header.get(1..) else {
+            return Err("CSV must have at least Category and one Series column".into());
+        };
+        if series_names.is_empty() {
+            return Err("CSV must have at least one Series column".into());
+        }
+        let mut cats = Vec::new();
+        let mut series_vals: Vec<Vec<Option<f64>>> = vec![Vec::new(); series_names.len()];
+        for line in lines.iter().skip(1) {
+            let row = parse_csv_line(line);
+            cats.push(row.first().cloned().unwrap_or_default());
+            for (si, slot) in series_vals.iter_mut().enumerate() {
+                let val = row.get(si + 1).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+                slot.push(val);
+            }
+        }
+        let old = std::mem::take(&mut self.series);
+        self.categories = cats;
+        self.series = series_names
+            .iter()
+            .zip(series_vals)
+            .enumerate()
+            .map(|(i, (name, vals))| {
+                let mut s = old.get(i).cloned().unwrap_or_default();
+                s.name = name.clone();
+                s.values = vals;
+                s
+            })
+            .collect();
+        self.raw = None;
+        Ok(())
+    }
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes => {
+                if chars.peek() == Some(&'"') {
+                    let _ = chars.next();
+                    cur.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            }
+            '"' => in_quotes = true,
+            ',' if !in_quotes => {
+                fields.push(std::mem::take(&mut cur));
+            }
+            _ => cur.push(c),
+        }
+    }
+    fields.push(cur);
+    fields
 }
 
 /// "Nice" axis scale: (min, max, major step) covering [lo, hi].
@@ -329,5 +439,27 @@ mod tests {
         let (_, hi) = c.value_range();
         assert!(hi > 10.0);
         assert_eq!(Chart::sample(ChartType::Pie).series.len(), 1);
+    }
+
+    #[test]
+    fn first_five_types_and_csv_roundtrip() {
+        assert_eq!(
+            ChartType::FIRST_FIVE.map(|k| k.label()),
+            ["Clustered Column", "Clustered Bar", "Line", "Area", "Pie"]
+        );
+        for kind in ChartType::FIRST_FIVE {
+            let orig = Chart::sample(kind);
+            let csv = orig.to_csv();
+            let mut loaded = Chart::sample(kind);
+            loaded.categories.clear();
+            loaded.series.clear();
+            loaded.load_csv(&csv).unwrap();
+            assert_eq!(loaded.categories, orig.categories);
+            assert_eq!(loaded.series.len(), orig.series.len());
+            for (a, b) in loaded.series.iter().zip(orig.series.iter()) {
+                assert_eq!(a.name, b.name);
+                assert_eq!(a.values, b.values);
+            }
+        }
     }
 }
