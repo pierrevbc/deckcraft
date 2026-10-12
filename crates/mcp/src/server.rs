@@ -24,7 +24,7 @@ list_commands and run them with run_command (or several with batch). Typical flo
 {layout:\"titleAndContent\", title, body} → add_shape / add_text_box / insert_picture / insert_chart → \
 inspect_slide to read back ids, boxes and text → render_slide to look at the result. Shapes are selected with \
 run_command edit.select {ids:[…]}; formatting commands (format.*, shape.fill, shape.line…) act on the selection or \
-on `ids`. Save with save_presentation (.deckcraft or .pptx).";
+on `ids`. Save with save_presentation (.deckcraft, .pptx, or a .deck folder).";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "deckcraft://document";
