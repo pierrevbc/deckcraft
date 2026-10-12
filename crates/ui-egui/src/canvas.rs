@@ -323,6 +323,7 @@ fn pointer(app: &mut SlideApp, ui: &Ui, resp: &egui::Response, xf: Xf) {
     if let Err(e) = r {
         app.set_status(e.to_string());
     }
+    app.drain_requests();
     // Cursor.
     let cursor = match (&app.session.tool.kind, &app.session.tool.hover) {
         (ToolKind::Shape { .. }, _) => egui::CursorIcon::Crosshair,

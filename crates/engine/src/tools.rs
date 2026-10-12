@@ -852,6 +852,10 @@ impl Session {
                         }
                         self.execute("text.selectWord", &json!({}))
                     }
+                    ShapeKind::Chart(_) => {
+                        self.ui_requests.push(crate::UiRequest::Dialog { id: "chartData".into(), params: json!({"id": id.0}) });
+                        Ok(Value::Null)
+                    }
                     ShapeKind::Group { .. } => Ok(Value::Null),
                     _ => {
                         self.ui_requests.push(crate::UiRequest::Pane { id: "format".into() });

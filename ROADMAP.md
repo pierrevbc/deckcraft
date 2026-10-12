@@ -129,6 +129,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 | Date | What landed |
 |---|---|
 | 2026-10-12 | Vector PDF export: shapes, gradients, transparency, tables and charts as PDF paths, real text in font subsets, pictures embedded as they are; effects and patterns rasterize per element (`vector: false` keeps the raster mode) |
+| 2026-10-11 | Interactive GridCraft spreadsheet data editor for charts; live chart sync on cell edit; chart title and elements options; CSV export / GridCraft launcher; full support and test coverage for the first five chart types (Clustered Column, Clustered Bar, Line, Area, Pie) |
 | 2026-10-10 | Progress docs restructured to the craftrules standard; full re-measure (breadth 79%, ready ~55%, mainstream ~53%, essentials ~62%, alpha). Landed: Animation Painter (#54), Morph geometry outlines (#27), animated GIF playback (#39), hyperlink colour and following links in the show (#37, #45), date fields in their own format (#36), flipped shapes keep readable text (#35), show transition fix (#46), start screen from the Home button (#49), MCP export lists PDF (#65), OmaStore manifest (#57) |
 | 2026-10-09 | v0.4.0 released. UAX #9 bidi and Arabic shaping (#4), Morph with Words and Characters (#5), tables grow to fit and PDF cell text (#14), rotating log file (#7), DX12 default on Windows (#16), H.264/HEVC overflow hardening (#2), PPTX sniffing anywhere in the zip (#19) |
 | 2026-10-08 | v0.2.0 and v0.3.0 released: Windows arm64, Flatpak aarch64, AppImage zsync updates, branded DMG |

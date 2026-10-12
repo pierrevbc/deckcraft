@@ -152,6 +152,27 @@ fn crop_dest_math() {
 }
 
 #[test]
+fn first_five_charts_render_with_data_labels() {
+    for kind in ChartType::FIRST_FIVE {
+        let mut chart = Chart::sample(kind);
+        chart.title = Some(format!("Test {}", kind.label()));
+        chart.data_labels = true;
+        chart.gridlines = true;
+        let sh = Shape {
+            id: ShapeId(800),
+            xfrm: Some(Xfrm::new(50.0, 50.0, 400.0, 300.0)),
+            kind: ShapeKind::Chart(Box::new(chart)),
+            ..Default::default()
+        };
+        let p = deck_with(vec![sh]);
+        let img = render_slide(&p, 0, &RenderOpts { scale: 1.0, ..Default::default() });
+        assert_eq!((img.width, img.height), (960, 540));
+        let non_white = img.pixels.as_chunks::<4>().0.iter().filter(|px| px[0] < 250 || px[1] < 250 || px[2] < 250).count();
+        assert!(non_white > 100, "chart {kind:?} should draw visible ink: {non_white}");
+    }
+}
+
+#[test]
 fn custom_path_parse() {
     let p = parse_path("M 0 0 L 10 0 C 1 2 3 4 5 6 Q 1 1 2 2 Z garbage L x y");
     assert!(p.elements().len() >= 5);
