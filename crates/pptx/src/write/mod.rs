@@ -165,10 +165,10 @@ impl Exp<'_> {
         let name = format!("ppt/charts/chart{}.xml", self.n_chart);
         let mut co = Out::new(&name);
         let xml = if let Some(kept) = chart::unchanged(c) {
-            let workbook = self.original_workbook(&mut co, c, &[]);
+            let workbook = self.original_workbook(&mut co, c, &[], None);
             chart::chart_xml(c, Some(kept), workbook.as_deref(), None)
         } else if let Some(source) = chart::source(c)
-            && let Some(workbook) = self.original_workbook(&mut co, c, &source.edits)
+            && let Some(workbook) = self.original_workbook(&mut co, c, &source.edits, source.area.as_ref())
         {
             chart::chart_xml(c, None, Some(&workbook), Some(&source.refs))
         } else {
@@ -187,10 +187,11 @@ impl Exp<'_> {
         Some(co.rels.add("package", &opc::relative(&co.name, &part), false))
     }
     /// The relationship from chart part `co` to the chart's own workbook (what PowerPoint opens
-    /// for Edit Data), with `edits` applied to its cells. With no edits the workbook is written
+    /// for Edit Data), with `edits` applied to its cells (and a table over the chart data moved
+    /// with `area`). With no edits the workbook is written
     /// as it was read; a linked one stays a link. `None` when there is none, or when the edits
     /// can't be applied in place. Each chart gets its own copy.
-    fn original_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart, edits: &[xlsx::Edit]) -> Option<String> {
+    fn original_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart, edits: &[xlsx::Edit], area: Option<&xlsx::AreaMove>) -> Option<String> {
         let p = self.p;
         let m = p.media(c.workbook?)?;
         let xlsx = m.content_type == chart::CT_XLSX;
@@ -201,7 +202,7 @@ impl Exp<'_> {
         let data = if edits.is_empty() {
             m.data.as_ref().clone()
         } else {
-            let patched = if xlsx { xlsx::patch(&m.data, edits) } else { None };
+            let patched = if xlsx { xlsx::patch(&m.data, edits, area) } else { None };
             if patched.is_none() {
                 log::warn!("pptx: chart data changed and its workbook can't be updated in place; writing a new workbook");
             }

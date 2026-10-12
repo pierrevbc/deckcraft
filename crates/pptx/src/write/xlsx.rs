@@ -2,9 +2,9 @@
 //! workbook PowerPoint opens for Edit Data keeps its other sheets, formulas and formatting.
 //!
 //! Only the parts that change are rewritten, and within them only the cells that change (plus the
-//! name of a table column whose header cell changes); every other zip entry is copied with its
-//! compressed bytes. Anything this can't do safely returns `None`, and the caller writes a
-//! workbook of its own instead.
+//! name of a table column whose header cell changes, and the table over the chart data when that
+//! data grows or shrinks); every other zip entry is copied with its compressed bytes. Anything
+//! this can't do safely returns `None`, and the caller writes a workbook of its own instead.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Write};
@@ -23,11 +23,24 @@ pub enum Value {
 }
 
 /// Cell `index` (0-based) of the range a chart formula names (`Sheet1!$B$2:$B$5`) gets `value`.
+/// A `fresh` cell is one the chart did not read before (a series or point added): it must be
+/// empty in the workbook, so nothing a person typed there is overwritten. A fresh `Blank` only
+/// checks that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Edit {
     pub formula: String,
     pub index: usize,
     pub value: Value,
+    pub fresh: bool,
+}
+
+/// The block of cells a chart reads moved from `from` to `to` (corners as (column, row),
+/// 1-based) on sheet `sheet`: a table that covers exactly `from` is resized to cover `to`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AreaMove {
+    pub sheet: String,
+    pub from: ((u32, u32), (u32, u32)),
+    pub to: ((u32, u32), (u32, u32)),
 }
 
 const MAX_COL: u32 = 16_384;
@@ -47,16 +60,54 @@ const AFTER_CALC_PR: [&str; 9] = [
 ];
 
 /// A one-column or one-row range of one sheet, cells as (column, row), 1-based.
-#[derive(Debug, PartialEq)]
-struct Range {
-    sheet: String,
-    from: (u32, u32),
-    to: (u32, u32),
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Range {
+    pub sheet: String,
+    pub from: (u32, u32),
+    pub to: (u32, u32),
 }
 
 impl Range {
+    /// Number of cells.
+    pub fn len(&self) -> usize {
+        let ((c1, r1), (c2, r2)) = (self.from, self.to);
+        (c2 - c1 + r2 - r1 + 1) as usize
+    }
+
+    /// Does the range run down a column? `None` for a single cell.
+    pub fn vertical(&self) -> Option<bool> {
+        (self.from != self.to).then_some(self.from.0 == self.to.0)
+    }
+
+    /// The range from the same first cell with `len` cells, down a column or along a row.
+    pub fn resized(&self, len: usize, vertical: bool) -> Option<Range> {
+        let extra = u32::try_from(len.checked_sub(1)?).ok()?;
+        let (c, r) = self.from;
+        let to = if vertical { (c, r.checked_add(extra)?) } else { (c.checked_add(extra)?, r) };
+        (to.0 <= MAX_COL && to.1 <= MAX_ROW).then(|| Range { sheet: self.sheet.clone(), from: self.from, to })
+    }
+
+    /// The range moved `by` columns (for a range down a column) or rows (along a row).
+    pub fn shifted(&self, by: u32, vertical: bool) -> Option<Range> {
+        let mv = |(c, r): (u32, u32)| -> Option<(u32, u32)> {
+            let p = if vertical { (c.checked_add(by)?, r) } else { (c, r.checked_add(by)?) };
+            (p.0 <= MAX_COL && p.1 <= MAX_ROW).then_some(p)
+        };
+        Some(Range { sheet: self.sheet.clone(), from: mv(self.from)?, to: mv(self.to)? })
+    }
+
+    /// The chart formula naming the range: `Sheet1!$B$2:$B$5`, `'Q1 data'!$A$1`.
+    pub fn formula(&self) -> String {
+        let plain = self.sheet.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && self.sheet.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && cell_ref(&self.sheet).is_none();
+        let sheet = if plain { self.sheet.clone() } else { format!("'{}'", self.sheet.replace('\'', "''")) };
+        let at = |(c, r): (u32, u32)| format!("${}${r}", col_name(c));
+        if self.from == self.to { format!("{sheet}!{}", at(self.from)) } else { format!("{sheet}!{}:{}", at(self.from), at(self.to)) }
+    }
+
     /// The `i`-th cell, in reading order.
-    fn cell(&self, i: usize) -> Option<(u32, u32)> {
+    pub fn cell(&self, i: usize) -> Option<(u32, u32)> {
         let i = u32::try_from(i).ok()?;
         let ((c1, r1), (c2, r2)) = (self.from, self.to);
         if c1 == c2 {
@@ -101,7 +152,7 @@ fn col_name(mut n: u32) -> String {
 
 /// A chart formula naming one range of one sheet: `Sheet1!$B$2:$B$5`, `'Q1 data'!$A$1`.
 /// Unions, names, functions and references to other workbooks are refused.
-fn parse_range(f: &str) -> Option<Range> {
+pub(crate) fn parse_range(f: &str) -> Option<Range> {
     let f = f.trim();
     let f = f.strip_prefix('=').unwrap_or(f);
     let (sheet, cells) = match f.strip_prefix('\'') {
@@ -263,8 +314,9 @@ fn opened(raw: &[u8]) -> String {
 }
 
 /// A worksheet with `cells` (keyed by (row, column)) written. Returns the new XML and whether a
-/// formula was replaced; `None` when a cell can't be placed safely.
-fn patch_sheet(xml: &[u8], cells: &BTreeMap<(u32, u32), &Value>) -> Option<(Vec<u8>, bool)> {
+/// formula was replaced; `None` when a cell can't be placed safely, or when one of the `fresh`
+/// cells holds something.
+fn patch_sheet(xml: &[u8], cells: &BTreeMap<(u32, u32), &Value>, fresh: &HashSet<(u32, u32)>) -> Option<(Vec<u8>, bool)> {
     let mut r = quick_xml::Reader::from_reader(xml);
     r.config_mut().trim_text(false);
     let mut out: Vec<u8> = Vec::with_capacity(xml.len() + 256);
@@ -337,11 +389,15 @@ fn patch_sheet(xml: &[u8], cells: &BTreeMap<(u32, u32), &Value>) -> Option<(Vec<
                 let before = take_before(&mut pending, n, col);
                 emit(&mut out, &mut copied, start, &cells_xml(&p, &before))?;
                 let mut stop = end;
+                let must_be_empty = fresh.contains(&(n, col));
                 if matches!(ev, Event::Start(_)) {
                     // Read to the end of the cell, watching for formulas.
                     let mut depth = 0usize;
                     loop {
                         match r.read_event().ok()? {
+                            Event::Start(c) | Event::Empty(c) if must_be_empty && ["v", "f", "is"].iter().any(|n| local_is(&c, n)) => {
+                                return None;
+                            }
                             Event::Start(c) => {
                                 if local_is(&c, "f") {
                                     dropped |= pending.contains_key(&(n, col));
@@ -491,10 +547,19 @@ fn rename_columns(xml: &[u8], names: &BTreeMap<usize, String>) -> Option<Vec<u8>
 /// Table header cells among the edits of one sheet: tables to rename columns in (part → column
 /// index → new name). `None` when a header can't take its new value: Excel wants unique, non-empty
 /// text names, and formulas that name the old column would break.
-fn table_renames(pkg: &Package, sheet: &str, cells: &BTreeMap<(u32, u32), &Value>) -> Option<Vec<(String, BTreeMap<usize, String>)>> {
+fn table_renames(
+    pkg: &Package,
+    resized: &HashMap<String, Vec<u8>>,
+    sheet: &str,
+    cells: &BTreeMap<(u32, u32), &Value>,
+) -> Option<Vec<(String, BTreeMap<usize, String>)>> {
     let mut out = vec![];
     for rel in pkg.rels(sheet).all_of("table") {
-        let Some(doc) = pkg.xml(&rel.target) else { continue };
+        let doc = match resized.get(&opc::norm(&rel.target)) {
+            Some(xml) => crate::xml::parse(xml).ok(),
+            None => pkg.xml(&rel.target),
+        };
+        let Some(doc) = doc else { continue };
         let t = &doc.root;
         let Some(range) = t.attr("ref").and_then(parse_area) else { continue };
         if t.attr("headerRowCount").is_some_and(|n| n.trim() == "0") {
@@ -535,6 +600,105 @@ fn table_renames(pkg: &Package, sheet: &str, cells: &BTreeMap<(u32, u32), &Value
     Some(out)
 }
 
+/// Tables of `sheet` that cover exactly the chart data before `mv`, resized to cover it after:
+/// (table part, new XML). A table is left as it is when its new columns would have no header text
+/// in `cells`, when it has a totals row or no header row, or when it sorts or filters.
+fn resize_tables(pkg: &Package, sheet: &str, mv: &AreaMove, cells: &BTreeMap<(u32, u32), &Value>) -> Vec<(String, Vec<u8>)> {
+    let mut out = vec![];
+    for rel in pkg.rels(sheet).all_of("table") {
+        let Some(doc) = pkg.xml(&rel.target) else { continue };
+        let t = &doc.root;
+        if t.attr("ref").and_then(parse_area) != Some(mv.from)
+            || t.attr("headerRowCount").is_some_and(|n| n.trim() == "0")
+            || t.attr("totalsRowCount").is_some_and(|n| n.trim() != "0")
+            || t.find("sortState").is_some()
+            || t.child("autoFilter").is_some_and(|f| f.elements().next().is_some())
+        {
+            continue;
+        }
+        let columns: Vec<u32> =
+            t.child("tableColumns").map(|c| c.children_named("tableColumn").map(|c| c.u32("id").unwrap_or(0)).collect()).unwrap_or_default();
+        let (((o1, _), (o2, _)), ((c1, r1), (c2, r2))) = (mv.from, mv.to);
+        if c1 != o1 || columns.len() != (o2 - o1 + 1) as usize {
+            continue;
+        }
+        let width = (c2 - c1 + 1) as usize;
+        // The columns added are named by their header cells.
+        let mut added = vec![];
+        for c in (c1 + columns.len() as u32)..=c2 {
+            match cells.get(&(r1, c)) {
+                Some(Value::Text(name)) if !name.trim().is_empty() => added.push(name.clone()),
+                _ => break,
+            }
+        }
+        if width > columns.len() && added.len() != width - columns.len() {
+            continue;
+        }
+        let next_id = columns.iter().max().copied().unwrap_or(0).saturating_add(1);
+        let area = format!("{}{r1}:{}{r2}", col_name(c1), col_name(c2));
+        if let Some(xml) = pkg.get(&rel.target).and_then(|x| retable(x, &area, width.min(columns.len()), &added, next_id)) {
+            out.push((rel.target.clone(), xml));
+        }
+    }
+    out
+}
+
+/// A table part with its `ref` (and its filter's) set to `area`, its first `keep` columns kept
+/// and columns named `added` appended (ids from `next_id`).
+fn retable(xml: &[u8], area: &str, keep: usize, added: &[String], next_id: u32) -> Option<Vec<u8>> {
+    let mut r = quick_xml::Reader::from_reader(xml);
+    let mut out = Vec::with_capacity(xml.len() + 128);
+    let mut copied = 0usize;
+    let mut i = 0usize;
+    let count = keep + added.len();
+    // Copy the original up to `start`, write `text`, go on from `to`.
+    let put = |out: &mut Vec<u8>, copied: &mut usize, start: usize, to: usize, text: &str| -> Option<()> {
+        out.extend_from_slice(xml.get(*copied..start)?);
+        out.extend_from_slice(text.as_bytes());
+        *copied = to;
+        Some(())
+    };
+    loop {
+        let start = pos(&r);
+        let ev = r.read_event().ok()?;
+        let end = pos(&r);
+        match ev {
+            Event::Eof => break,
+            Event::Start(e) | Event::Empty(e) if local_is(&e, "table") || local_is(&e, "autoFilter") => {
+                put(&mut out, &mut copied, start, end, &retag(&e, &[("ref", Some(area.to_string()))], ends_empty(xml, end)))?;
+            }
+            Event::Start(e) if local_is(&e, "tableColumns") => {
+                put(&mut out, &mut copied, start, end, &retag(&e, &[("count", Some(count.to_string()))], false))?;
+            }
+            Event::Start(e) | Event::Empty(e) if local_is(&e, "tableColumn") => {
+                if i >= keep {
+                    let mut to = end;
+                    if !ends_empty(xml, end) {
+                        let name = e.name().as_ref().to_vec();
+                        r.read_to_end(quick_xml::name::QName(&name)).ok()?;
+                        to = pos(&r);
+                    }
+                    put(&mut out, &mut copied, start, to, "")?;
+                }
+                i += 1;
+            }
+            Event::End(e) if e.local_name().as_ref() == b"tableColumns" => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let p = name.rsplit_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
+                let mut cols = String::new();
+                for (k, n) in added.iter().enumerate() {
+                    let id = next_id.checked_add(u32::try_from(k).ok()?)?;
+                    cols.push_str(&format!("<{p}tableColumn id=\"{id}\" name=\"{}\"/>", esc_attr(n)));
+                }
+                put(&mut out, &mut copied, start, start, &cols)?;
+            }
+            _ => {}
+        }
+    }
+    out.extend_from_slice(xml.get(copied..)?);
+    Some(out)
+}
+
 /// `A1:D5` → ((1, 1), (4, 5)).
 fn parse_area(r: &str) -> Option<((u32, u32), (u32, u32))> {
     let (a, b) = r.trim().split_once(':').unwrap_or((r.trim(), r.trim()));
@@ -550,10 +714,11 @@ fn xl_xml(pkg: &Package) -> impl Iterator<Item = String> + '_ {
 }
 
 /// The workbook `xlsx` with `edits` applied, every other cell and part as it was. Formulas
-/// elsewhere are recalculated when the workbook opens. `None` when an edit can't be placed safely
-/// (a range that isn't one row or column of one sheet, a cell holding a shared or array formula,
-/// a table header that can't take the new name, an unreadable part…).
-pub fn patch(xlsx: &[u8], edits: &[Edit]) -> Option<Vec<u8>> {
+/// elsewhere are recalculated when the workbook opens. A table over the chart data follows
+/// `area` when it moves. `None` when an edit can't be placed safely (a range that isn't one row
+/// or column of one sheet, a cell holding a shared or array formula, a table header that can't
+/// take the new name, a fresh cell that isn't empty, an unreadable part…).
+pub fn patch(xlsx: &[u8], edits: &[Edit], area: Option<&AreaMove>) -> Option<Vec<u8>> {
     let pkg = Package::open(xlsx).ok()?;
     let book = pkg.rels("").first_of("officeDocument")?.target.clone();
     let book_rels = pkg.rels(&book);
@@ -565,21 +730,41 @@ pub fn patch(xlsx: &[u8], edits: &[Edit]) -> Option<Vec<u8>> {
         }
     }
     let mut by_sheet: BTreeMap<String, BTreeMap<(u32, u32), &Value>> = BTreeMap::new();
+    let mut fresh: HashMap<String, HashSet<(u32, u32)>> = HashMap::new();
     for e in edits {
         let range = parse_range(&e.formula)?;
         let part = sheets.get(&range.sheet.to_lowercase())?;
         let (col, row) = range.cell(e.index)?;
-        by_sheet.entry(part.clone()).or_default().insert((row, col), &e.value);
+        let cells = by_sheet.entry(part.clone()).or_default();
+        if e.fresh {
+            fresh.entry(part.clone()).or_default().insert((row, col));
+        }
+        if !(e.fresh && e.value == Value::Blank) {
+            cells.insert((row, col), &e.value);
+        }
     }
 
     let mut changed: HashMap<String, Vec<u8>> = HashMap::new();
     let mut removed: HashSet<String> = HashSet::new();
     let mut dropped_formula = false;
+    let none = HashSet::new();
     for (part, cells) in &by_sheet {
-        for (table, names) in table_renames(&pkg, part, cells)? {
-            changed.insert(opc::norm(&table), rename_columns(pkg.get(&table)?, &names)?);
+        let mut tables = HashMap::new();
+        if let Some(mv) = area.filter(|mv| sheets.get(&mv.sheet.to_lowercase()) == Some(part)) {
+            for (table, xml) in resize_tables(&pkg, part, mv, cells) {
+                tables.insert(opc::norm(&table), xml);
+            }
         }
-        let (xml, dropped) = patch_sheet(pkg.get(part)?, cells)?;
+        for (table, names) in table_renames(&pkg, &tables, part, cells)? {
+            let key = opc::norm(&table);
+            let xml = match tables.get(&key) {
+                Some(x) => x.clone(),
+                None => pkg.get(&table)?.to_vec(),
+            };
+            tables.insert(key, rename_columns(&xml, &names)?);
+        }
+        changed.extend(tables);
+        let (xml, dropped) = patch_sheet(pkg.get(part)?, cells, fresh.get(part).unwrap_or(&none))?;
         dropped_formula |= dropped;
         changed.insert(opc::norm(part), xml);
     }
@@ -665,6 +850,17 @@ mod tests {
             assert!(parse_range(bad).is_none(), "{bad}");
         }
         assert_eq!(col_name(1), "A");
+        // Ranges grow, shrink, move and print back.
+        let r = parse_range("'Chart data'!$B$2:$B$5").unwrap();
+        assert_eq!((r.len(), r.vertical()), (4, Some(true)));
+        assert_eq!(r.resized(6, true).unwrap().formula(), "'Chart data'!$B$2:$B$7");
+        assert_eq!(r.resized(1, true).unwrap().formula(), "'Chart data'!$B$2");
+        assert!(r.resized(0, true).is_none());
+        assert_eq!(r.shifted(2, true).unwrap().formula(), "'Chart data'!$D$2:$D$5");
+        assert_eq!(parse_range("Sheet1!$B$1:$D$1").unwrap().resized(2, false).unwrap().formula(), "Sheet1!$B$1:$C$1");
+        assert_eq!(parse_range("A1!$A$1").unwrap().formula(), "'A1'!$A$1");
+        assert_eq!(parse_range("Sheet1!$A$1").unwrap().vertical(), None);
+        assert!(parse_range("Sheet1!$XFD$1").unwrap().shifted(1, true).is_none());
         assert_eq!(col_name(28), "AB");
         assert_eq!(cell_ref("$AB$10"), Some((28, 10)));
     }
@@ -677,7 +873,8 @@ mod tests {
     fn sheet_cells_are_replaced_and_inserted_in_order() {
         let xml = br#"<?xml version="1.0"?><worksheet xmlns="m"><sheetData><row r="1" spans="1:3"><c r="A1" t="s"><v>0</v></c><c r="C1" s="2"><v>7</v></c></row><row r="3"/><row r="5"><c r="B5"><f>SUM(B1:B4)</f><v>3</v></c></row></sheetData><mergeCells count="0"/></worksheet>"#;
         let (n, t, b) = (Value::Number(2.5), Value::Text("Q <1>".into()), Value::Blank);
-        let (out, dropped) = patch_sheet(xml, &cells(&[((1, 2), &n), ((1, 3), &b), ((2, 1), &t), ((3, 2), &n), ((5, 2), &n), ((6, 1), &n)])).unwrap();
+        let (out, dropped) =
+            patch_sheet(xml, &cells(&[((1, 2), &n), ((1, 3), &b), ((2, 1), &t), ((3, 2), &n), ((5, 2), &n), ((6, 1), &n)]), &HashSet::new()).unwrap();
         let out = String::from_utf8(out).unwrap();
         assert!(dropped);
         assert_eq!(
@@ -692,7 +889,7 @@ mod tests {
         );
         // Prefixed elements and an empty sheet.
         let xml = br#"<x:worksheet xmlns:x="m"><x:sheetData/></x:worksheet>"#;
-        let (out, dropped) = patch_sheet(xml, &cells(&[((2, 1), &n)])).unwrap();
+        let (out, dropped) = patch_sheet(xml, &cells(&[((2, 1), &n)]), &HashSet::new()).unwrap();
         assert!(!dropped);
         assert_eq!(
             String::from_utf8(out).unwrap(),
@@ -706,12 +903,20 @@ mod tests {
         // A shared formula's anchor: other cells use it.
         let shared =
             br#"<worksheet><sheetData><row r="2"><c r="B2"><f t="shared" ref="B2:B4" si="0">A2*2</f><v>2</v></c></row></sheetData></worksheet>"#;
-        assert!(patch_sheet(shared, &cells(&[((2, 2), &n)])).is_none());
+        assert!(patch_sheet(shared, &cells(&[((2, 2), &n)]), &HashSet::new()).is_none());
         // Rows or cells without their position.
         let implicit = br#"<worksheet><sheetData><row><c><v>1</v></c></row></sheetData></worksheet>"#;
-        assert!(patch_sheet(implicit, &cells(&[((1, 1), &n)])).is_none());
+        assert!(patch_sheet(implicit, &cells(&[((1, 1), &n)]), &HashSet::new()).is_none());
         // No sheet data to put the cell in.
-        assert!(patch_sheet(b"<worksheet/>", &cells(&[((1, 1), &n)])).is_none());
+        assert!(patch_sheet(b"<worksheet/>", &cells(&[((1, 1), &n)]), &HashSet::new()).is_none());
+        // A fresh cell must be empty: a styled empty cell is, a value or a formula is not.
+        let xml = br#"<worksheet><sheetData><row r="2"><c r="E2" s="3"/><c r="F2"><v>1</v></c><c r="G2" s="1"></c></row></sheetData></worksheet>"#;
+        let fresh = |c: u32| HashSet::from([(2, c)]);
+        assert!(patch_sheet(xml, &cells(&[((2, 5), &n)]), &fresh(5)).is_some());
+        assert!(patch_sheet(xml, &cells(&[((2, 7), &n)]), &fresh(7)).is_some());
+        assert!(patch_sheet(xml, &cells(&[((2, 6), &n)]), &fresh(6)).is_none());
+        assert!(patch_sheet(xml, &cells(&[]), &fresh(6)).is_none());
+        assert!(patch_sheet(xml, &cells(&[]), &fresh(8)).is_some());
     }
 
     #[test]
@@ -725,6 +930,21 @@ mod tests {
         );
         let last = full_calc_on_load(br#"<workbook><sheets></sheets></workbook>"#).unwrap();
         assert_eq!(String::from_utf8(last).unwrap(), r#"<workbook><sheets></sheets><calcPr fullCalcOnLoad="1"/></workbook>"#);
+    }
+
+    #[test]
+    fn tables_follow_the_data() {
+        let table = br#"<table ref="A1:D5" id="1"><autoFilter ref="A1:D5"/><tableColumns count="4"><tableColumn id="1" name=" "/><tableColumn id="2" name="S1"/><tableColumn id="3" name="S2"><x/></tableColumn><tableColumn id="4" name="S3"/></tableColumns><tableStyleInfo name="T"/></table>"#;
+        let out = String::from_utf8(retable(table, "A1:E6", 4, &["S & 4".to_string()], 5).unwrap()).unwrap();
+        assert_eq!(
+            out,
+            r#"<table ref="A1:E6" id="1"><autoFilter ref="A1:E6"/><tableColumns count="5"><tableColumn id="1" name=" "/><tableColumn id="2" name="S1"/><tableColumn id="3" name="S2"><x/></tableColumn><tableColumn id="4" name="S3"/><tableColumn id="5" name="S &amp; 4"/></tableColumns><tableStyleInfo name="T"/></table>"#
+        );
+        let out = String::from_utf8(retable(table, "A1:B4", 2, &[], 5).unwrap()).unwrap();
+        assert_eq!(
+            out,
+            r#"<table ref="A1:B4" id="1"><autoFilter ref="A1:B4"/><tableColumns count="2"><tableColumn id="1" name=" "/><tableColumn id="2" name="S1"/></tableColumns><tableStyleInfo name="T"/></table>"#
+        );
     }
 
     #[test]

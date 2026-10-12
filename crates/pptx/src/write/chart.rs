@@ -2,12 +2,13 @@
 //! the chart data (what PowerPoint opens for Edit Data).
 //!
 //! - An unchanged chart keeps its original part and workbook.
-//! - An imported chart whose data still fits its original ranges ([`source`]) is written from the
-//!   model with its original formulas. Its workbook is kept byte for byte when only the
-//!   presentation changed (title, type, legend…); when the data changed, only the cells that
-//!   changed are rewritten in it.
-//! - Otherwise (a new chart, series or points added or removed…) both are written from the model,
-//!   the workbook laid out where the part's formulas point.
+//! - An imported chart whose data can be written where its workbook holds it ([`source`]) is
+//!   written from the model with its original formulas, or their ranges grown, shrunk or repeated
+//!   for added series. Its workbook is kept byte for byte when only the presentation changed
+//!   (title, type, legend…); when the data changed, only the cells that changed are rewritten in
+//!   it.
+//! - Otherwise (a new chart, a category chart turned into a scatter chart…) both are written from
+//!   the model, the workbook laid out where the part's formulas point.
 
 use std::collections::BTreeMap;
 
@@ -15,7 +16,7 @@ use deckcraft_color::SchemeSlot;
 use deckcraft_model::chart::{Chart, ChartType, Series, ThreeD};
 use deckcraft_model::style::{ColorRef, Fill};
 
-use super::xlsx::{Edit, Value};
+use super::xlsx::{AreaMove, Edit, Range, Value, parse_range};
 use crate::opc::{NS_A, NS_C, NS_R, PackageOut, RelsOut};
 use crate::xml::{A, El, W};
 
@@ -111,77 +112,222 @@ fn generated_refs(c: &Chart) -> Vec<Refs> {
         .collect()
 }
 
-/// An edited chart whose data still fits where its workbook holds it: the formulas of the
-/// imported chart part, and the cells to update for the data that changed since (none when only
-/// the title, type, legend or other options changed).
+/// An edited chart whose data can still be written where its workbook holds it: the formulas of
+/// the chart part (the imported ones, or their ranges grown, shrunk or repeated for a new series),
+/// the cells to update for the data that changed since (none when only the title, type, legend
+/// or other options changed), and how the block of chart data moved (a table over it follows).
 pub struct Source {
     pub refs: Vec<Refs>,
     pub edits: Vec<Edit>,
+    pub area: Option<AreaMove>,
 }
 
-/// Cells of `formula` whose number changed.
-fn number_edits(edits: &mut Vec<Edit>, formula: &str, now: &[Option<f64>], was: &[Option<f64>]) {
-    for (index, (a, b)) in now.iter().zip(was).enumerate() {
-        if a != b {
-            let value = a.filter(|v| v.is_finite()).map_or(Value::Blank, Value::Number);
-            edits.push(Edit { formula: formula.to_string(), index, value });
+/// The cells of one series in the workbook.
+#[derive(Clone, PartialEq)]
+struct Place {
+    name: Range,
+    /// Categories, or X values.
+    x: Range,
+    y: Range,
+    size: Option<Range>,
+    /// The values run down a column (series side by side), not along a row.
+    vertical: bool,
+}
+
+/// A cell: sheet (lower case, as Excel matches names), column, row.
+type Key = (String, u32, u32);
+
+/// Cells by key, with the sheet name as written.
+#[derive(Default)]
+struct CellMap {
+    cells: BTreeMap<Key, Value>,
+    sheets: BTreeMap<String, String>,
+}
+
+impl CellMap {
+    /// Cell `i` of `range` holds `v`. `None` when another series already put something else there.
+    fn set(&mut self, range: &Range, i: usize, v: Value) -> Option<()> {
+        let (col, row) = range.cell(i)?;
+        let sheet = range.sheet.to_lowercase();
+        self.sheets.entry(sheet.clone()).or_insert_with(|| range.sheet.clone());
+        match self.cells.get(&(sheet.clone(), col, row)) {
+            Some(was) if *was != v => None,
+            Some(_) => Some(()),
+            None => {
+                self.cells.insert((sheet, col, row), v);
+                Some(())
+            }
         }
+    }
+
+    fn formula(&self, key: &Key) -> String {
+        let sheet = self.sheets.get(&key.0).cloned().unwrap_or_else(|| key.0.clone());
+        Range { sheet, from: (key.1, key.2), to: (key.1, key.2) }.formula()
+    }
+
+    /// The sheet and corners of the block the cells fill, when they are all on one sheet.
+    fn block(&self) -> Option<(String, ((u32, u32), (u32, u32)))> {
+        let first = self.cells.keys().next()?;
+        if self.cells.keys().any(|k| k.0 != first.0) {
+            return None;
+        }
+        let cols = self.cells.keys().map(|k| k.1);
+        let rows = self.cells.keys().map(|k| k.2);
+        let corners = ((cols.clone().min()?, rows.clone().min()?), (cols.max()?, rows.max()?));
+        Some((self.sheets.get(&first.0)?.clone(), corners))
     }
 }
 
-/// [`Source`] of a chart read from a PPTX. `None` when the data no longer fits the original
-/// ranges: series or points added or removed, a category chart turned into a scatter or bubble
-/// chart (or back), data the chart part held as literals rather than formulas. The chart then
-/// gets a workbook of its own, as a new chart does.
+fn num(v: Option<&Option<f64>>) -> Value {
+    v.copied().flatten().filter(|v| v.is_finite()).map_or(Value::Blank, Value::Number)
+}
+
+fn text(v: Option<&String>) -> Value {
+    v.filter(|t| !t.is_empty()).map_or(Value::Blank, |t| Value::Text(t.clone()))
+}
+
+/// `r` with `n` cells, unchanged when it has them.
+fn fit(r: &Range, n: usize, vertical: bool) -> Option<Range> {
+    if r.len() == n { Some(r.clone()) } else { r.resized(n, vertical) }
+}
+
+/// The position of a series range across the series: its column for series side by side.
+fn across(r: &Range, vertical: bool) -> u32 {
+    if vertical { r.from.0 } else { r.from.1 }
+}
+
+/// [`Source`] of a chart read from a PPTX. `None` when its data can't be written where the
+/// workbook holds it: a category chart turned into a scatter or bubble chart (or back), data the
+/// chart part held as literals rather than formulas, ranges that aren't one row or column, two
+/// series that would need different values in the same cell. The chart then gets a workbook of
+/// its own, as a new chart does.
+///
+/// Series and points added or removed keep the workbook: ranges grow or shrink from their first
+/// cell, a new series goes next to the last one (the same distance from it as that one from the
+/// one before), and the cells the chart no longer reads are cleared. Cells it reads for the first
+/// time must be empty in the workbook ([`Edit::fresh`]).
 pub fn source(c: &Chart) -> Option<Source> {
     let src = c.source.as_ref()?;
     let xy = c.kind.is_xy();
-    if src.xy != xy || src.series.len() != c.series.len() || (!xy && c.categories.len() != src.categories.len()) {
+    let bubble = c.kind == ChartType::Bubble;
+    if src.xy != xy || src.series.is_empty() || c.series.is_empty() {
         return None;
     }
-    let mut refs = vec![];
-    let mut edits = vec![];
-    for (s, o) in c.series.iter().zip(&src.series) {
-        let r = Refs {
-            name: o.name_ref.clone()?,
-            x: o.categories_ref.clone()?,
-            y: o.values_ref.clone()?,
-            size: if c.kind == ChartType::Bubble { o.sizes_ref.clone()? } else { o.sizes_ref.clone().unwrap_or_default() },
-        };
-        if s.values.len() != o.values.len() {
+    // Where the series were read from, and what those cells held.
+    let mut old: Vec<Place> = vec![];
+    let mut known = CellMap::default();
+    for o in &src.series {
+        let name = parse_range(o.name_ref.as_deref()?)?;
+        let x = parse_range(o.categories_ref.as_deref()?)?;
+        let y = parse_range(o.values_ref.as_deref()?)?;
+        let size = if bubble { Some(parse_range(o.sizes_ref.as_deref()?)?) } else { None };
+        let vertical = y.vertical().or(x.vertical()).unwrap_or(name.from.0 == y.from.0 || name.from.1 != y.from.1);
+        let along = |r: &Range| r.vertical().is_none_or(|v| v == vertical);
+        if name.len() != 1 || !along(&x) || !along(&y) || !size.as_ref().is_none_or(along) {
             return None;
         }
-        if s.name != o.name {
-            edits.push(Edit { formula: r.name.clone(), index: 0, value: Value::Text(s.name.clone()) });
+        known.set(&name, 0, text(Some(&o.name)))?;
+        for i in 0..y.len() {
+            known.set(&y, i, num(o.values.get(i)))?;
         }
-        number_edits(&mut edits, &r.y, &s.values, &o.values);
-        if xy {
-            if s.x_values.len() != o.x_values.len() {
-                return None;
+        for i in 0..x.len() {
+            known.set(&x, i, if xy { num(o.x_values.get(i)) } else { text(src.categories.get(i)) })?;
+        }
+        if let Some(z) = &size {
+            for i in 0..z.len() {
+                known.set(z, i, num(o.sizes.get(i)))?;
             }
-            number_edits(&mut edits, &r.x, &s.x_values, &o.x_values);
         }
-        if c.kind == ChartType::Bubble {
-            if s.sizes.len() != o.sizes.len() {
-                return None;
-            }
-            number_edits(&mut edits, &r.size, &s.sizes, &o.sizes);
-        }
-        refs.push(r);
+        old.push(Place { name, x, y, size, vertical });
     }
-    if !xy {
-        let mut ranges: Vec<&str> = refs.iter().map(|r| r.x.as_str()).collect();
-        ranges.sort_unstable();
-        ranges.dedup();
-        for (index, (a, b)) in c.categories.iter().zip(&src.categories).enumerate() {
-            if a != b {
-                for f in &ranges {
-                    edits.push(Edit { formula: f.to_string(), index, value: Value::Text(a.clone()) });
+
+    // Where the series go now.
+    let n = c.point_count();
+    let last = old.last()?.clone();
+    let v = last.vertical;
+    let x_shared = old.iter().all(|p| p.x == last.x);
+    let stride = match old.len().checked_sub(2).and_then(|i| old.get(i)) {
+        Some(prev) => across(&last.y, v).checked_sub(across(&prev.y, v)).filter(|d| *d > 0)?,
+        None => 1 + u32::from(bubble) + u32::from(!x_shared),
+    };
+    let mut places = vec![];
+    for i in 0..c.series.len() {
+        let p = match old.get(i) {
+            Some(p) => Place {
+                name: p.name.clone(),
+                x: fit(&p.x, n, p.vertical)?,
+                y: fit(&p.y, n, p.vertical)?,
+                size: match &p.size {
+                    Some(z) => Some(fit(z, n, p.vertical)?),
+                    None => None,
+                },
+                vertical: p.vertical,
+            },
+            None => {
+                let by = stride.checked_mul(u32::try_from(i + 1 - old.len()).ok()?)?;
+                Place {
+                    name: last.name.shifted(by, v)?,
+                    x: if x_shared { fit(&last.x, n, v)? } else { fit(&last.x.shifted(by, v)?, n, v)? },
+                    y: fit(&last.y.shifted(by, v)?, n, v)?,
+                    size: match &last.size {
+                        Some(z) => Some(fit(&z.shifted(by, v)?, n, v)?),
+                        None => None,
+                    },
+                    vertical: v,
                 }
             }
+        };
+        places.push(p);
+    }
+    let mut target = CellMap::default();
+    let mut refs = vec![];
+    for (i, (s, p)) in c.series.iter().zip(&places).enumerate() {
+        target.set(&p.name, 0, text(Some(&s.name)))?;
+        let xs = c.x_values_of(i);
+        for j in 0..n {
+            target.set(&p.y, j, num(s.values.get(j)))?;
+            target.set(&p.x, j, if xy { num(xs.get(j)) } else { text(c.categories.get(j)) })?;
+            if let Some(z) = &p.size {
+                target.set(z, j, num(s.sizes.get(j)))?;
+            }
+        }
+        // The formulas as they were when the ranges didn't change.
+        let o = old.get(i).zip(src.series.get(i));
+        let keep = |now: &Range, was: Option<&Range>, f: Option<&String>| match (was, f) {
+            (Some(w), Some(f)) if w == now => f.clone(),
+            _ => now.formula(),
+        };
+        refs.push(Refs {
+            name: keep(&p.name, o.map(|(w, _)| &w.name), o.and_then(|(_, f)| f.name_ref.as_ref())),
+            x: keep(&p.x, o.map(|(w, _)| &w.x), o.and_then(|(_, f)| f.categories_ref.as_ref())),
+            y: keep(&p.y, o.map(|(w, _)| &w.y), o.and_then(|(_, f)| f.values_ref.as_ref())),
+            size: match &p.size {
+                Some(z) => keep(z, o.and_then(|(w, _)| w.size.as_ref()), o.and_then(|(_, f)| f.sizes_ref.as_ref())),
+                None => o.and_then(|(_, f)| f.sizes_ref.clone()).unwrap_or_default(),
+            },
+        });
+    }
+
+    // The cells that change, those read for the first time, and those no longer read.
+    let mut edits = vec![];
+    for (key, value) in &target.cells {
+        let fresh = match known.cells.get(key) {
+            Some(was) if was == value => continue,
+            Some(_) => false,
+            None => true,
+        };
+        edits.push(Edit { formula: target.formula(key), index: 0, value: value.clone(), fresh });
+    }
+    for (key, was) in &known.cells {
+        if !target.cells.contains_key(key) && *was != Value::Blank {
+            edits.push(Edit { formula: known.formula(key), index: 0, value: Value::Blank, fresh: false });
         }
     }
-    Some(Source { refs, edits })
+    let area = match (known.block(), target.block()) {
+        (Some((sheet, from)), Some((to_sheet, to))) if from != to && sheet.eq_ignore_ascii_case(&to_sheet) => Some(AreaMove { sheet, from, to }),
+        _ => None,
+    };
+    Some(Source { refs, edits, area })
 }
 
 fn simple_fill(w: &mut W, f: &Fill) {
