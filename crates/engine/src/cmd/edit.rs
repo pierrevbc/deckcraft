@@ -32,6 +32,7 @@ fn restore(s: &mut Session, redo: bool) -> Result<Value> {
     st.doc = e.doc;
     st.selection = e.selection;
     st.interaction = None;
+    st.undo_group = None;
     st.revision += 1;
     Ok(json!({"label": e.label}))
 }
