@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canvas;
+pub mod chart_pane;
 pub mod chartdata;
 pub mod control;
 pub mod credits;
