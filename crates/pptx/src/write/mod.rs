@@ -5,6 +5,7 @@ pub(crate) mod dml;
 mod shapes;
 mod theme;
 mod timing;
+mod xlsx;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -163,29 +164,51 @@ impl Exp<'_> {
         self.n_chart += 1;
         let name = format!("ppt/charts/chart{}.xml", self.n_chart);
         let mut co = Out::new(&name);
-        let kept = chart::unchanged(c);
-        let workbook = self.chart_workbook(&mut co, c, kept.is_some());
-        self.pkg.xml_part(&name, CT_CHART, chart::chart_xml(c, kept, workbook.as_deref()));
+        let xml = if let Some(kept) = chart::unchanged(c) {
+            let workbook = self.original_workbook(&mut co, c, &[]);
+            chart::chart_xml(c, Some(kept), workbook.as_deref(), None)
+        } else if let Some(source) = chart::source(c)
+            && let Some(workbook) = self.original_workbook(&mut co, c, &source.edits)
+        {
+            chart::chart_xml(c, None, Some(&workbook), Some(&source.refs))
+        } else {
+            let workbook = self.new_workbook(&mut co, c);
+            chart::chart_xml(c, None, workbook.as_deref(), None)
+        };
+        self.pkg.xml_part(&name, CT_CHART, xml);
         self.pkg.rels(&name, &co.rels);
         o.rels.add_new("chart", &opc::relative(&o.name, &name), false)
     }
-    /// The relationship from chart part `co` to the workbook PowerPoint opens for Edit Data: the
-    /// chart's own workbook when the chart is unchanged (its formulas point into it), otherwise
-    /// one generated from the chart data. Each chart gets its own copy.
-    fn chart_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart, kept: bool) -> Option<String> {
-        if !kept {
-            let data = chart::workbook_xlsx(c)?;
-            let part = self.embedding("xlsx", chart::CT_XLSX, data);
-            return Some(co.rels.add("package", &opc::relative(&co.name, &part), false));
-        }
+    /// The relationship from chart part `co` to a workbook generated from the chart data, laid out
+    /// where the generated chart part's formulas point.
+    fn new_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart) -> Option<String> {
+        let data = chart::workbook_xlsx(c)?;
+        let part = self.embedding("xlsx", chart::CT_XLSX, data);
+        Some(co.rels.add("package", &opc::relative(&co.name, &part), false))
+    }
+    /// The relationship from chart part `co` to the chart's own workbook (what PowerPoint opens
+    /// for Edit Data), with `edits` applied to its cells. With no edits the workbook is written
+    /// as it was read; a linked one stays a link. `None` when there is none, or when the edits
+    /// can't be applied in place. Each chart gets its own copy.
+    fn original_workbook(&mut self, co: &mut Out, c: &deckcraft_model::Chart, edits: &[xlsx::Edit]) -> Option<String> {
         let p = self.p;
         let m = p.media(c.workbook?)?;
+        let xlsx = m.content_type == chart::CT_XLSX;
         if m.data.is_empty() {
-            let link = m.link.as_deref()?;
+            let link = m.link.as_deref().filter(|_| edits.is_empty())?;
             return Some(co.rels.add("oleObject", link, true));
         }
-        let (kind, ext) = if m.content_type == chart::CT_XLSX { ("package", "xlsx") } else { ("oleObject", "bin") };
-        let part = self.embedding(ext, &m.content_type, m.data.as_ref().clone());
+        let data = if edits.is_empty() {
+            m.data.as_ref().clone()
+        } else {
+            let patched = if xlsx { xlsx::patch(&m.data, edits) } else { None };
+            if patched.is_none() {
+                log::warn!("pptx: chart data changed and its workbook can't be updated in place; writing a new workbook");
+            }
+            patched?
+        };
+        let (kind, ext) = if xlsx { ("package", "xlsx") } else { ("oleObject", "bin") };
+        let part = self.embedding(ext, &m.content_type, data);
         Some(co.rels.add(kind, &opc::relative(&co.name, &part), false))
     }
     /// A new part under `ppt/embeddings/`.
