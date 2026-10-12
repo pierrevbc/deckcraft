@@ -11,8 +11,9 @@
 
 use std::collections::BTreeMap;
 
-use deckcraft_model::chart::{Chart, ChartType, Series};
-use deckcraft_model::style::Fill;
+use deckcraft_color::SchemeSlot;
+use deckcraft_model::chart::{Chart, ChartType, Series, ThreeD};
+use deckcraft_model::style::{ColorRef, Fill};
 
 use super::xlsx::{Edit, Value};
 use crate::opc::{NS_A, NS_C, NS_R, PackageOut, RelsOut};
@@ -75,8 +76,8 @@ fn layout(c: &Chart) -> Vec<Cols> {
         _ => true,
     });
     match c.kind {
-        ChartType::Scatter if shared_x => (0..n).map(|i| Cols { x: 0, y: i + 1, size: None }).collect(),
-        ChartType::Scatter => (0..n).map(|i| Cols { x: 2 * i, y: 2 * i + 1, size: None }).collect(),
+        k if k.is_scatter() && shared_x => (0..n).map(|i| Cols { x: 0, y: i + 1, size: None }).collect(),
+        k if k.is_scatter() => (0..n).map(|i| Cols { x: 2 * i, y: 2 * i + 1, size: None }).collect(),
         ChartType::Bubble if shared_x => (0..n).map(|i| Cols { x: 0, y: 2 * i + 1, size: Some(2 * i + 2) }).collect(),
         ChartType::Bubble => (0..n).map(|i| Cols { x: 3 * i, y: 3 * i + 1, size: Some(3 * i + 2) }).collect(),
         _ => (0..n).map(|i| Cols { x: 0, y: i + 1, size: None }).collect(),
@@ -134,7 +135,7 @@ fn number_edits(edits: &mut Vec<Edit>, formula: &str, now: &[Option<f64>], was: 
 /// gets a workbook of its own, as a new chart does.
 pub fn source(c: &Chart) -> Option<Source> {
     let src = c.source.as_ref()?;
-    let xy = matches!(c.kind, ChartType::Scatter | ChartType::Bubble);
+    let xy = c.kind.is_xy();
     if src.xy != xy || src.series.len() != c.series.len() || (!xy && c.categories.len() != src.categories.len()) {
         return None;
     }
@@ -276,56 +277,153 @@ enum Group {
     Area,
     Pie,
     Doughnut,
+    OfPie,
     Scatter,
     Radar,
     Bubble,
+    Stock,
 }
 
 fn group_of(k: ChartType) -> Group {
     match k {
-        ChartType::Line | ChartType::LineMarkers | ChartType::StackedLine | ChartType::Stock => Group::Line,
-        ChartType::Area | ChartType::StackedArea | ChartType::Surface => Group::Area,
-        ChartType::Pie => Group::Pie,
-        ChartType::Doughnut | ChartType::Sunburst => Group::Doughnut,
-        ChartType::Scatter => Group::Scatter,
+        k if k.is_line() => Group::Line,
+        k if k.is_area() => Group::Area,
+        ChartType::Surface => Group::Area,
+        ChartType::Pie | ChartType::ExplodedPie => Group::Pie,
+        ChartType::Doughnut | ChartType::ExplodedDoughnut | ChartType::Sunburst => Group::Doughnut,
+        ChartType::PieOfPie | ChartType::BarOfPie => Group::OfPie,
+        k if k.is_scatter() => Group::Scatter,
         ChartType::Bubble => Group::Bubble,
-        ChartType::Radar | ChartType::FilledRadar => Group::Radar,
+        k if k.is_radar() => Group::Radar,
+        k if k.is_stock() => Group::Stock,
         _ => Group::Bar,
     }
 }
 
-fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType, g: Group) {
+/// The ids of the axes a plot group uses: category (or X), value (or Y), and the depth axis of a
+/// 3-D chart that has one.
+#[derive(Clone, Copy)]
+struct AxIds {
+    cat: u32,
+    val: u32,
+    ser: Option<u32>,
+}
+
+const PRIMARY: AxIds = AxIds { cat: AX_CAT, val: AX_VAL, ser: None };
+const SECONDARY: AxIds = AxIds { cat: AX_CAT2, val: AX_VAL2, ser: None };
+
+/// The XML element of a plot group, 2-D or 3-D.
+fn group_tag(g: Group, three_d: bool) -> &'static str {
+    match (g, three_d) {
+        (Group::Bar, false) => "c:barChart",
+        (Group::Bar, true) => "c:bar3DChart",
+        (Group::Line, false) => "c:lineChart",
+        (Group::Line, true) => "c:line3DChart",
+        (Group::Area, false) => "c:areaChart",
+        (Group::Area, true) => "c:area3DChart",
+        (Group::Pie, false) => "c:pieChart",
+        (Group::Pie, true) => "c:pie3DChart",
+        (Group::Doughnut, _) => "c:doughnutChart",
+        (Group::OfPie, _) => "c:ofPieChart",
+        (Group::Scatter, _) => "c:scatterChart",
+        (Group::Radar, _) => "c:radarChart",
+        (Group::Bubble, _) => "c:bubbleChart",
+        (Group::Stock, _) => "c:stockChart",
+    }
+}
+
+/// Whether `g` exists as a 3-D plot group.
+fn has_3d(g: Group) -> bool {
+    matches!(g, Group::Bar | Group::Line | Group::Area | Group::Pie)
+}
+
+/// `c:spPr` of a series: its fill and line, with no line at all for the types that draw none
+/// (points only, stock prices: their high-low lines and up-down bars are the group's).
+fn series_sp_pr(w: &mut W, s: &Series, no_line: bool) {
+    if !no_line {
+        sp_pr(w, s.fill.as_ref(), s.line.as_ref());
+        return;
+    }
+    w.open0("c:spPr");
+    if let Some(f) = &s.fill {
+        simple_fill(w, f);
+    }
+    w.open("a:ln", A::new().o("w", s.line.as_ref().and_then(|l| l.width).map(super::dml::emu_pos)));
+    w.empty0("a:noFill");
+    w.close("a:ln");
+    w.close("c:spPr");
+}
+
+fn marker(w: &mut W, symbol: &str, size: Option<u32>) {
+    if !symbol.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return;
+    }
+    w.open0("c:marker");
+    w.val("c:symbol", symbol);
+    if let Some(n) = size {
+        w.val("c:size", n);
+    }
+    w.close("c:marker");
+}
+
+/// A marker filled and outlined with the series colour: its own fill, else the theme accent the
+/// series takes.
+fn coloured_marker(w: &mut W, s: &Series, i: usize) {
+    let col = match &s.fill {
+        Some(Fill::Solid { color }) => color.clone(),
+        _ => ColorRef::scheme(ACCENTS.get(i % 6).copied().unwrap_or(SchemeSlot::Accent1)),
+    };
+    w.open0("c:marker");
+    if let Some(m) = s.marker.as_deref().filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric())) {
+        w.val("c:symbol", m);
+    }
+    w.open0("c:spPr");
+    super::dml::solid(w, &col);
+    w.open("a:ln", A::new().a("w", 9525));
+    super::dml::solid(w, &col);
+    w.close("a:ln");
+    w.close("c:spPr");
+    w.close("c:marker");
+}
+
+const ACCENTS: [SchemeSlot; 6] =
+    [SchemeSlot::Accent1, SchemeSlot::Accent2, SchemeSlot::Accent3, SchemeSlot::Accent4, SchemeSlot::Accent5, SchemeSlot::Accent6];
+
+#[allow(clippy::too_many_arguments)]
+fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType, g: Group, close: bool) {
     w.open0("c:ser");
     w.val("c:idx", i);
     w.val("c:order", i);
     w.open0("c:tx");
     str_cache(w, &r.name, std::slice::from_ref(&s.name));
     w.close("c:tx");
-    sp_pr(w, s.fill.as_ref(), s.line.as_ref());
+    series_sp_pr(w, s, kind.points_only() || g == Group::Stock);
     if g == Group::Bar {
         w.val("c:invertIfNegative", 0);
     }
-    if matches!(g, Group::Line | Group::Scatter | Group::Radar) {
-        let sym = match (&s.marker, kind) {
-            (Some(m), _) if !m.is_empty() => Some(m.as_str()),
-            (_, ChartType::LineMarkers) => None,
-            (_, ChartType::Scatter) => None,
-            _ => Some("none"),
-        };
-        if let Some(sym) = sym.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric())) {
-            w.open0("c:marker");
-            w.val("c:symbol", sym);
-            w.close("c:marker");
-        }
+    if matches!(g, Group::Pie | Group::Doughnut) && kind.exploded() {
+        w.val("c:explosion", c.variant.explosion_or_default());
     }
-    if g == Group::Pie || g == Group::Doughnut || g == Group::Bar {
+    match g {
+        Group::Stock if close && !kind.has_open() => marker(w, "dash", Some(7)),
+        Group::Stock => marker(w, "none", None),
+        // Markers without a line: their colour is spelled out, as applications that take a
+        // marker's colour from the series line would draw them all alike.
+        Group::Line | Group::Scatter | Group::Radar if kind.points_only() => coloured_marker(w, s, i),
+        Group::Line | Group::Scatter | Group::Radar => match &s.marker {
+            Some(m) if !m.is_empty() && kind.markers() => marker(w, m, None),
+            _ if kind.markers() => {}
+            _ => marker(w, "none", None),
+        },
+        _ => {}
+    }
+    if matches!(g, Group::Pie | Group::Doughnut | Group::OfPie | Group::Bar) {
         for (idx, f) in s.point_fills.iter().take(1000) {
             w.open0("c:dPt");
             w.val("c:idx", idx);
             if g == Group::Bar {
                 w.val("c:invertIfNegative", 0);
-            }
-            if g != Group::Bar {
+            } else {
                 w.val("c:bubble3D", 0);
             }
             sp_pr(w, Some(f), None);
@@ -357,8 +455,8 @@ fn series(w: &mut W, c: &Chart, s: &Series, i: usize, r: &Refs, kind: ChartType,
         w.open0("c:val");
         num_cache(w, &r.y, &s.values);
         w.close("c:val");
-        if g == Group::Line {
-            w.val("c:smooth", if s.smooth { 1 } else { 0 });
+        if matches!(g, Group::Line | Group::Stock) {
+            w.val("c:smooth", if s.smooth && g == Group::Line { 1 } else { 0 });
         }
     }
     w.close("c:ser");
@@ -381,13 +479,23 @@ fn data_labels(w: &mut W, show: bool) {
 
 const AX_CAT: u32 = 50_001;
 const AX_VAL: u32 = 50_002;
+const AX_CAT2: u32 = 50_003;
+const AX_VAL2: u32 = 50_004;
+const AX_SER: u32 = 50_005;
 
-fn axes(w: &mut W, c: &Chart, g: Group) {
+/// The axes of plot groups of kind `g` using `ids`; `secondary` ones sit on the right, their
+/// category axis hidden.
+fn axes(w: &mut W, c: &Chart, g: Group, ids: AxIds, secondary: bool) {
     let horizontal = c.kind.horizontal() && g == Group::Bar;
-    let (cat_pos, val_pos) = if horizontal { ("l", "b") } else { ("b", "l") };
+    let (cat_pos, val_pos) = match (horizontal, secondary) {
+        (true, false) => ("l", "b"),
+        (true, true) => ("r", "t"),
+        (false, false) => ("b", "l"),
+        (false, true) => ("t", "r"),
+    };
     if g == Group::Scatter || g == Group::Bubble {
         w.open0("c:valAx");
-        w.val("c:axId", AX_CAT);
+        w.val("c:axId", ids.cat);
         w.open0("c:scaling");
         w.val("c:orientation", "minMax");
         w.close("c:scaling");
@@ -400,26 +508,26 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
         w.val("c:majorTickMark", "out");
         w.val("c:minorTickMark", "none");
         w.val("c:tickLblPos", "nextTo");
-        w.val("c:crossAx", AX_VAL);
+        w.val("c:crossAx", ids.val);
         w.val("c:crosses", "autoZero");
         w.val("c:crossBetween", "midCat");
         w.close("c:valAx");
     } else {
         w.open0("c:catAx");
-        w.val("c:axId", AX_CAT);
+        w.val("c:axId", ids.cat);
         w.open0("c:scaling");
         w.val("c:orientation", "minMax");
         w.close("c:scaling");
-        w.val("c:delete", 0);
+        w.val("c:delete", if secondary { 1 } else { 0 });
         w.val("c:axPos", cat_pos);
-        if let Some(t) = &c.axis_titles.0 {
+        if let Some(t) = c.axis_titles.0.as_ref().filter(|_| !secondary) {
             title(w, t);
         }
         w.empty("c:numFmt", A::new().a("formatCode", "General").a("sourceLinked", 1));
         w.val("c:majorTickMark", "none");
         w.val("c:minorTickMark", "none");
         w.val("c:tickLblPos", "nextTo");
-        w.val("c:crossAx", AX_VAL);
+        w.val("c:crossAx", ids.val);
         w.val("c:crosses", "autoZero");
         w.val("c:auto", 1);
         w.val("c:lblAlgn", "ctr");
@@ -428,56 +536,67 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
         w.close("c:catAx");
     }
     w.open0("c:valAx");
-    w.val("c:axId", AX_VAL);
+    w.val("c:axId", ids.val);
     w.open0("c:scaling");
     w.val("c:orientation", "minMax");
-    if let Some(m) = c.y_max.filter(|v| v.is_finite()) {
-        w.val("c:max", fmt_num(m));
-    }
-    if let Some(m) = c.y_min.filter(|v| v.is_finite()) {
-        w.val("c:min", fmt_num(m));
+    if !secondary {
+        if let Some(m) = c.y_max.filter(|v| v.is_finite()) {
+            w.val("c:max", fmt_num(m));
+        }
+        if let Some(m) = c.y_min.filter(|v| v.is_finite()) {
+            w.val("c:min", fmt_num(m));
+        }
     }
     w.close("c:scaling");
     w.val("c:delete", 0);
     w.val("c:axPos", val_pos);
-    if c.gridlines {
+    if c.gridlines && !secondary {
         w.empty0("c:majorGridlines");
     }
-    if let Some(t) = &c.axis_titles.1 {
+    if let Some(t) = c.axis_titles.1.as_ref().filter(|_| !secondary) {
         title(w, t);
     }
     w.empty("c:numFmt", A::new().a("formatCode", if c.kind.percent() { "0%" } else { "General" }).a("sourceLinked", 1));
     w.val("c:majorTickMark", "none");
     w.val("c:minorTickMark", "none");
     w.val("c:tickLblPos", "nextTo");
-    w.val("c:crossAx", AX_CAT);
-    w.val("c:crosses", "autoZero");
+    w.val("c:crossAx", ids.cat);
+    w.val("c:crosses", if secondary { "max" } else { "autoZero" });
     w.val("c:crossBetween", if g == Group::Area || g == Group::Scatter { "midCat" } else { "between" });
     w.close("c:valAx");
+    if let Some(ser) = ids.ser {
+        w.open0("c:serAx");
+        w.val("c:axId", ser);
+        w.open0("c:scaling");
+        w.val("c:orientation", "minMax");
+        w.close("c:scaling");
+        w.val("c:delete", 0);
+        w.val("c:axPos", "b");
+        w.val("c:majorTickMark", "none");
+        w.val("c:minorTickMark", "none");
+        w.val("c:tickLblPos", "nextTo");
+        w.val("c:crossAx", ids.val);
+        w.val("c:crosses", "autoZero");
+        w.close("c:serAx");
+    }
 }
 
-fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], refs: &[Refs]) {
+/// One plot group (`c:barChart`…) of `kind` holding `list`, on axes `ids`; 3-D when `three_d`.
+fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], refs: &[Refs], ids: AxIds, three_d: Option<&ThreeD>) {
     let g = group_of(kind);
+    let three_d = three_d.filter(|_| has_3d(g));
+    let deep = three_d.is_some_and(|t| t.deep || g == Group::Line);
     let grouping = if kind.percent() {
         "percentStacked"
     } else if kind.stacked() {
         "stacked"
-    } else if matches!(g, Group::Bar) {
+    } else if matches!(g, Group::Bar) && !deep {
         "clustered"
     } else {
         "standard"
     };
     let vary = if c.vary_colors { 1 } else { 0 };
-    let tag = match g {
-        Group::Bar => "c:barChart",
-        Group::Line => "c:lineChart",
-        Group::Area => "c:areaChart",
-        Group::Pie => "c:pieChart",
-        Group::Doughnut => "c:doughnutChart",
-        Group::Scatter => "c:scatterChart",
-        Group::Radar => "c:radarChart",
-        Group::Bubble => "c:bubbleChart",
-    };
+    let tag = group_tag(g, three_d.is_some());
     w.open0(tag);
     match g {
         Group::Bar => {
@@ -485,13 +604,20 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
             w.val("c:grouping", grouping);
         }
         Group::Line | Group::Area => w.val("c:grouping", grouping),
-        Group::Scatter => w.val("c:scatterStyle", "lineMarker"),
+        Group::Scatter => {
+            let smooth = list.iter().any(|(_, s)| s.smooth);
+            w.val("c:scatterStyle", if smooth { "smoothMarker" } else { "lineMarker" });
+        }
         Group::Radar => w.val("c:radarStyle", if kind == ChartType::FilledRadar { "filled" } else { "marker" }),
+        Group::OfPie => w.val("c:ofPieType", if kind == ChartType::BarOfPie { "bar" } else { "pie" }),
         _ => {}
     }
-    w.val("c:varyColors", vary);
-    for (i, s) in list {
-        series(w, c, s, *i, refs.get(*i).unwrap_or(&Refs::default()), kind, g);
+    if g != Group::Stock {
+        w.val("c:varyColors", vary);
+    }
+    let last = list.len().saturating_sub(1);
+    for (k, (i, s)) in list.iter().enumerate() {
+        series(w, c, s, *i, refs.get(*i).unwrap_or(&Refs::default()), kind, g, k == last);
     }
     if c.data_labels {
         data_labels(w, true);
@@ -499,24 +625,81 @@ fn plot_group(w: &mut W, c: &Chart, kind: ChartType, list: &[(usize, &Series)], 
     match g {
         Group::Bar => {
             w.val("c:gapWidth", (c.gap_width.clamp(0.0, 5.0) * 100.0).round() as i64);
-            let ov = if kind.stacked() { 100 } else { (c.overlap.clamp(-1.0, 1.0) * 100.0).round() as i64 };
-            if ov != 0 {
-                w.val("c:overlap", ov);
+            if let Some(t) = three_d {
+                w.val("c:shape", t.shape.ooxml());
+            } else {
+                let ov = if kind.stacked() { 100 } else { (c.overlap.clamp(-1.0, 1.0) * 100.0).round() as i64 };
+                if ov != 0 {
+                    w.val("c:overlap", ov);
+                }
             }
         }
-        Group::Line => w.val("c:marker", 1),
-        Group::Pie => w.val("c:firstSliceAng", 0),
+        Group::Line if three_d.is_none() => w.val("c:marker", 1),
+        Group::Pie if three_d.is_none() => w.val("c:firstSliceAng", 0),
         Group::Doughnut => {
             w.val("c:firstSliceAng", 0);
             w.val("c:holeSize", (c.hole_size.clamp(0.1, 0.9) * 100.0).round() as i64);
         }
+        Group::OfPie => {
+            w.val("c:gapWidth", 100);
+            if c.variant.split_pos == 0 {
+                w.val("c:splitType", "auto");
+            } else {
+                w.val("c:splitType", "pos");
+                w.val("c:splitPos", c.variant.split_pos);
+            }
+            w.val("c:secondPieSize", c.variant.second_size_or_default());
+            w.empty0("c:serLines");
+        }
+        Group::Stock => {
+            w.empty0("c:hiLowLines");
+            if kind.has_open() {
+                w.open0("c:upDownBars");
+                w.val("c:gapWidth", 150);
+                w.empty0("c:upBars");
+                w.empty0("c:downBars");
+                w.close("c:upDownBars");
+            }
+        }
         _ => {}
     }
-    if !matches!(g, Group::Pie | Group::Doughnut) {
-        w.val("c:axId", AX_CAT);
-        w.val("c:axId", AX_VAL);
+    if !matches!(g, Group::Pie | Group::Doughnut | Group::OfPie) {
+        w.val("c:axId", ids.cat);
+        w.val("c:axId", ids.val);
+        if let Some(ser) = ids.ser {
+            w.val("c:axId", ser);
+        }
     }
     w.close(tag);
+}
+
+/// The plot groups of a chart that mixes types or axes: one per series type and axis, in the
+/// order of their first series. Types a combination can't hold become columns or lines.
+fn combo_groups(c: &Chart) -> Vec<(ChartType, bool, Vec<(usize, &Series)>)> {
+    let main = match c.kind {
+        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
+        k => k,
+    };
+    let mut out: Vec<(ChartType, bool, Vec<(usize, &Series)>)> = vec![];
+    for (i, s) in c.series.iter().enumerate() {
+        let k = if c.kind == ChartType::Combo { s.kind.unwrap_or(main) } else { main };
+        let k = match k {
+            k if k.is_pie() || k.is_xy() => ChartType::Column,
+            k if k.is_radar() || k.is_stock() => ChartType::Line,
+            k => k,
+        };
+        match out.iter_mut().find(|(gk, sec, _)| *gk == k && *sec == s.secondary_axis) {
+            Some((_, _, list)) => list.push((i, s)),
+            None => out.push((k, s.secondary_axis, vec![(i, s)])),
+        }
+    }
+    // A secondary axis needs a primary one.
+    if out.iter().all(|(_, sec, _)| *sec) {
+        for g in &mut out {
+            g.1 = false;
+        }
+    }
+    out
 }
 
 /// The chart's original part when the chart is unchanged since it was read: its formulas,
@@ -545,6 +728,82 @@ fn set_rid(e: &mut El, rid: &str) {
         .map(|(k, _)| k.clone())
         .unwrap_or_else(|| "r:id".into());
     e.set_attr(&key, rid);
+}
+
+fn view_3d(w: &mut W, t: &ThreeD) {
+    w.open0("c:view3D");
+    w.val("c:rotX", t.rot_x.clamp(-90, 90));
+    w.val("c:rotY", t.rot_y.min(360));
+    w.val("c:depthPercent", t.depth_percent.clamp(20, 2000));
+    w.val("c:rAngAx", if t.right_angle_axes { 1 } else { 0 });
+    if !t.right_angle_axes {
+        w.val("c:perspective", t.perspective.min(240));
+    }
+    w.close("c:view3D");
+}
+
+/// The plot groups and axes of the chart.
+fn plot_area(w: &mut W, c: &Chart, refs: &[Refs]) {
+    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
+    let combo = c.kind == ChartType::Combo
+        || (c.series.iter().any(|s| s.secondary_axis) && !c.kind.is_pie() && !c.kind.is_xy() && !c.kind.is_stock() && !c.kind.is_radar());
+    if combo {
+        let groups = combo_groups(c);
+        for (k, sec, list) in &groups {
+            plot_group(w, c, *k, list, refs, if *sec { SECONDARY } else { PRIMARY }, None);
+        }
+        let first = groups.first().map_or(Group::Bar, |g| group_of(g.0));
+        axes(w, c, first, PRIMARY, false);
+        if let Some((k, _, _)) = groups.iter().find(|g| g.1) {
+            axes(w, c, group_of(*k), SECONDARY, true);
+        }
+        return;
+    }
+    if c.kind.is_stock() {
+        let (volume, prices) = if c.kind.has_volume() { indexed.split_at(1.min(indexed.len())) } else { (&[][..], &indexed[..]) };
+        let price_ids = if volume.is_empty() { PRIMARY } else { SECONDARY };
+        if !volume.is_empty() {
+            plot_group(w, c, ChartType::Column, volume, refs, PRIMARY, None);
+        }
+        // A stock group holds three or four series; other counts are drawn as lines.
+        let kind = if (3..=4).contains(&prices.len()) { c.kind } else { ChartType::Line };
+        if !prices.is_empty() {
+            plot_group(w, c, kind, prices, refs, price_ids, None);
+        }
+        axes(w, c, Group::Stock, PRIMARY, false);
+        if !volume.is_empty() && !prices.is_empty() {
+            axes(w, c, Group::Stock, SECONDARY, true);
+        }
+        return;
+    }
+    if !natively_written(c.kind) {
+        log::warn!("pptx: {} chart written as a column chart", c.kind.label());
+    }
+    let g = group_of(c.kind);
+    let three_d = c.variant.three_d.as_ref().filter(|_| has_3d(g));
+    let ids = match three_d {
+        Some(t) if t.deep || g == Group::Line => AxIds { ser: Some(AX_SER), ..PRIMARY },
+        _ => PRIMARY,
+    };
+    plot_group(w, c, c.kind, &indexed, refs, ids, three_d);
+    if !matches!(g, Group::Pie | Group::Doughnut | Group::OfPie) {
+        axes(w, c, g, ids, false);
+    }
+}
+
+/// Types with a chart part element of their own (the others are written as column charts).
+fn natively_written(k: ChartType) -> bool {
+    !matches!(
+        k,
+        ChartType::Surface
+            | ChartType::Histogram
+            | ChartType::Pareto
+            | ChartType::BoxWhisker
+            | ChartType::Waterfall
+            | ChartType::Funnel
+            | ChartType::Treemap
+            | ChartType::Sunburst
+    )
 }
 
 /// The chart part XML. `kept` is the original part from [`unchanged`]; `workbook` is the id of
@@ -579,66 +838,15 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>, refs: Opti
         }
         None => w.val("c:autoTitleDeleted", 1),
     }
+    if let Some(t) = &c.variant.three_d
+        && c.kind != ChartType::Combo
+        && has_3d(group_of(c.kind))
+    {
+        view_3d(&mut w, t);
+    }
     w.open0("c:plotArea");
     w.empty0("c:layout");
-    let indexed: Vec<(usize, &Series)> = c.series.iter().enumerate().collect();
-    let main = match c.kind {
-        ChartType::Combo => c.series.first().and_then(|s| s.kind).unwrap_or(ChartType::Column),
-        k => k,
-    };
-    if c.kind == ChartType::Combo {
-        // One plot group per series type, sharing the axes.
-        let mut kinds: Vec<ChartType> = vec![];
-        for s in &c.series {
-            let k = s.kind.unwrap_or(main);
-            let k = if matches!(group_of(k), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { k };
-            if !kinds.contains(&k) {
-                kinds.push(k);
-            }
-        }
-        for k in kinds {
-            let list: Vec<(usize, &Series)> = indexed
-                .iter()
-                .filter(|(_, s)| {
-                    let sk = s.kind.unwrap_or(main);
-                    let sk =
-                        if matches!(group_of(sk), Group::Pie | Group::Doughnut | Group::Scatter | Group::Bubble) { ChartType::Column } else { sk };
-                    sk == k
-                })
-                .copied()
-                .collect();
-            plot_group(&mut w, c, k, &list, &refs);
-        }
-        axes(&mut w, c, Group::Bar);
-    } else {
-        if !matches!(
-            c.kind,
-            ChartType::Column
-                | ChartType::StackedColumn
-                | ChartType::PercentColumn
-                | ChartType::Bar
-                | ChartType::StackedBar
-                | ChartType::PercentBar
-                | ChartType::Line
-                | ChartType::LineMarkers
-                | ChartType::StackedLine
-                | ChartType::Area
-                | ChartType::StackedArea
-                | ChartType::Pie
-                | ChartType::Doughnut
-                | ChartType::Scatter
-                | ChartType::Bubble
-                | ChartType::Radar
-                | ChartType::FilledRadar
-        ) {
-            log::warn!("pptx: {} chart written as a column chart", c.kind.label());
-        }
-        plot_group(&mut w, c, main, &indexed, &refs);
-        let g = group_of(main);
-        if !matches!(g, Group::Pie | Group::Doughnut) {
-            axes(&mut w, c, g);
-        }
-    }
+    plot_area(&mut w, c, &refs);
     if let Some(f) = &c.plot_fill {
         sp_pr(&mut w, Some(f), None);
     }
@@ -663,6 +871,15 @@ pub fn chart_xml(c: &Chart, kept: Option<El>, workbook: Option<&str>, refs: Opti
         w.open("c:externalData", A::new().a("r:id", rid));
         w.val("c:autoUpdate", 0);
         w.close("c:externalData");
+    }
+    if c.variant.stepped && c.kind.has_lines() {
+        // OOXML has no stepped lines: our own extension keeps them, other applications draw
+        // straight lines.
+        w.open0("c:extLst");
+        w.open("c:ext", A::new().a("uri", crate::CHART_EXT_URI).a("xmlns:dc", crate::NS_DECKCRAFT_CHART));
+        w.empty("dc:stepped", A::new().a("val", 1));
+        w.close("c:ext");
+        w.close("c:extLst");
     }
     w.close("c:chartSpace");
     w.finish()
@@ -700,7 +917,7 @@ pub fn workbook_xlsx(c: &Chart) -> Option<Vec<u8>> {
     if c.series.is_empty() {
         return None;
     }
-    let xy = matches!(c.kind, ChartType::Scatter | ChartType::Bubble);
+    let xy = c.kind.is_xy();
     let mut cells: BTreeMap<(usize, usize), Cell> = BTreeMap::new();
     for (s, k) in c.series.iter().zip(layout(c)) {
         if !s.name.is_empty() {
@@ -861,6 +1078,90 @@ mod tests {
         assert_formulas_match(&bubbles);
         bubbles.series[2].x_values = vec![Some(0.5), Some(1.5), Some(2.5), Some(3.5)];
         assert_formulas_match(&bubbles);
+    }
+
+    /// A gallery entry as a new chart gets it.
+    fn preset_chart(p: &deckcraft_model::chart::ChartPreset) -> Chart {
+        let mut c = Chart::sample(p.kind);
+        p.apply(&mut c);
+        c
+    }
+
+    /// The local names of the elements of `xml`, in document order.
+    fn element_names(xml: &[u8]) -> Vec<String> {
+        fn walk(e: &El, out: &mut Vec<String>) {
+            out.push(e.local().to_string());
+            for c in e.elements() {
+                walk(c, out);
+            }
+        }
+        let doc = crate::xml::parse(xml).unwrap();
+        let mut out = vec![];
+        walk(&doc.root, &mut out);
+        out
+    }
+
+    #[test]
+    fn every_gallery_type_gets_a_workbook_matching_its_formulas() {
+        for p in deckcraft_model::chart::ChartPreset::GALLERY {
+            assert_formulas_match(&preset_chart(p));
+        }
+    }
+
+    #[test]
+    fn gallery_types_write_their_own_plot_groups() {
+        let groups = |id: &str| {
+            let p = deckcraft_model::chart::ChartPreset::find(id).unwrap();
+            let names = element_names(&chart_xml(&preset_chart(p), None, None, None));
+            names
+                .into_iter()
+                .filter(|n| n.ends_with("Chart") || matches!(n.as_str(), "catAx" | "valAx" | "serAx" | "dateAx" | "view3D"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(groups("column"), "barChart catAx valAx");
+        assert_eq!(groups("columnCylinder"), "view3D bar3DChart catAx valAx");
+        assert_eq!(groups("deepColumn3d"), "view3D bar3DChart catAx valAx serAx");
+        assert_eq!(groups("line3d"), "view3D line3DChart catAx valAx serAx");
+        assert_eq!(groups("area3d"), "view3D area3DChart catAx valAx serAx");
+        assert_eq!(groups("stackedArea3d"), "view3D area3DChart catAx valAx");
+        assert_eq!(groups("pie3d"), "view3D pie3DChart");
+        assert_eq!(groups("explodedPie"), "pieChart");
+        assert_eq!(groups("explodedDoughnut"), "doughnutChart");
+        assert_eq!(groups("pieOfPie"), "ofPieChart");
+        assert_eq!(groups("barOfPie"), "ofPieChart");
+        assert_eq!(groups("scatterSmooth"), "scatterChart valAx valAx");
+        assert_eq!(groups("bubble"), "bubbleChart valAx valAx");
+        assert_eq!(groups("radarPoints"), "radarChart catAx valAx");
+        assert_eq!(groups("stock"), "stockChart catAx valAx");
+        assert_eq!(groups("stockOhlc"), "stockChart catAx valAx");
+        assert_eq!(groups("stockVhlc"), "barChart stockChart catAx valAx catAx valAx");
+        assert_eq!(groups("stockVohlc"), "barChart stockChart catAx valAx catAx valAx");
+        assert_eq!(groups("columnLine"), "barChart lineChart catAx valAx");
+        assert_eq!(groups("columnLineSecondary"), "barChart lineChart catAx valAx catAx valAx");
+        // Stepped lines are kept in our extension, which other applications skip.
+        let stepped =
+            String::from_utf8(chart_xml(&preset_chart(deckcraft_model::chart::ChartPreset::find("lineStepped").unwrap()), None, None, None)).unwrap();
+        assert!(stepped.contains(r#"<c:ext uri="urn:deckcraft:chart" xmlns:dc="urn:deckcraft:chart"><dc:stepped val="1"/></c:ext>"#), "{stepped}");
+        // Points only: the series draw no line.
+        let points = String::from_utf8(chart_xml(&Chart::sample(ChartType::LinePoints), None, None, None)).unwrap();
+        assert_eq!(points.matches("<a:ln><a:noFill/></a:ln>").count(), 3, "{points}");
+        // A 3-D bar group has a shape and no overlap; the 2-D one no shape.
+        let cyl =
+            String::from_utf8(chart_xml(&preset_chart(deckcraft_model::chart::ChartPreset::find("barCylinder").unwrap()), None, None, None)).unwrap();
+        assert!(cyl.contains(r#"<c:shape val="cylinder"/>"#) && !cyl.contains("c:overlap"), "{cyl}");
+    }
+
+    #[test]
+    fn stock_groups_hold_three_or_four_series() {
+        // Two prices can't make a stock group: they are written as lines.
+        let mut c = Chart::sample(ChartType::Stock);
+        c.series.truncate(2);
+        let names = element_names(&chart_xml(&c, None, None, None));
+        assert!(names.iter().any(|n| n == "lineChart") && !names.iter().any(|n| n == "stockChart"), "{names:?}");
+        let mut c = Chart::sample(ChartType::StockVohlc);
+        c.series.clear();
+        let _ = chart_xml(&c, None, None, None);
     }
 
     #[test]
