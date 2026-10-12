@@ -1,6 +1,6 @@
 # File-format parity with PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (chart parts: every chart type and variant, embedded workbook kept and updated, formatting read and written on every plot group; previous: minor, chart parts: every chart type and variant) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (`.deck` folder format added; previous: minor, chart parts: every chart type and variant, embedded workbook kept and updated, formatting read and written on every plot group) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every format PowerPoint reads or writes, DeckCraft's support, fidelity and how it is tested.
 Gaps are itemized in [gaps.md](gaps.md#file-formats). Dimension score: **~58% ready**
@@ -24,6 +24,8 @@ PowerPoint opens and saves; Viewer = opens only).
 | `.odp` OpenDocument | Editor | no | no | | none |
 | `.thmx` Office theme | Viewer | no | no | Browse for themes is a P2 row | none |
 | `.deckcraft` native (zip + JSON) | n/a | yes (also `.slidecraft`) | yes | Lossless for the DeckCraft model, forward compatible | `crates/format` tests |
+| `.deck` folder (native, one JSON file per slide, for Git; [spec](deck-folder-format.md)) | n/a | yes (also folders written by `deckgit`) | yes | Lossless (same model as `.deckcraft`), byte-identical re-save, stable slide file names, unknown keys kept; not in the browser build | `crates/format/src/folder/tests.rs`, `crates/engine/src/folder/tests.rs`, `apps/deckcraft-cli/tests/deck_folder.rs`, ui-egui dialog test |
+| PDF | export | no | yes | Slides, notes pages, handouts (1–9); real-text layer with embedded subsets, links, bookmarks. Slide artwork is a raster image at print resolution, not vector | `crates/pdf` tests |
 | PDF | export | no | yes | Slides, notes pages, handouts (1–9), links, bookmarks. Vector: shapes, outlines, gradients, transparency, tables and charts as PDF paths; real text in embedded font subsets; JPEG/PNG pictures embedded as they are. Shapes with shadow, glow, soft edges, reflection or a fill overlay, pattern fills, rectangle and outline path gradients, text shadows and glows, and colour emoji rasterize alone at `dpi`; WMF/EMF pictures embed as pixels; `vector: false` keeps whole-slide rasters | `crates/pdf` tests |
 | Outline `.rtf` / `.txt` | export (RTF), import (outline) | `.txt`/`.md` outline (`slide.fromOutline`) | `.txt` outline | No RTF | engine tests |
 | PNG / JPEG slide images | export | n/a | yes (`file.export`, `deckcraft-cli render`) | Matches the editor's renderer | render tests |
@@ -112,3 +114,4 @@ the round trip even though DeckCraft doesn't model it.
 | 2026-10-12 | minor | Text warps rendered; their adjust values read and written |
 | 2026-10-12 | trivial | Groups with a small legacy child coordinate space draw outlines, dashes, arrowheads and ink at their own width (#233) |
 | 2026-10-10 | major | Created from PowerPoint 16.113.4's `CFBundleDocumentTypes`, `crates/pptx` reader/writer and tests, and the open round-trip issues |
+| 2026-10-12 | minor | `.deck` folder format (#220): read and write, with its tests; no change to the dimension score (not a PowerPoint format) |

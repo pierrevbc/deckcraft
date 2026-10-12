@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~20 points and ~120–210 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: every LibreOffice chart type and variant, chart data editing and chart formatting for every type; previous: minor, progress log: every LibreOffice chart type and variant) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (progress log: `.deck` folder format; previous: minor, progress log: every LibreOffice chart type and variant, chart data editing and chart formatting for every type) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 DeckCraft aims at full PowerPoint parity, and to be better: faster, open (a documented zip+JSON
 format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and available everywhere
@@ -128,6 +128,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | `.deck` folder format (#220): a presentation as a folder of JSON files, one per slide, for Git; File ▸ Open Folder…, Save As and Export to `.deck`, `deckcraft-cli convert`, MCP `save_presentation`/`export` |
 | 2026-10-12 | Every LibreOffice Impress chart type and variant: stacked and 100% lines and areas, points-only and stepped lines, exploded pies and doughnuts, pie and bar of pie, scatter and radar variants, sized bubbles, the four stock charts, column-line combos with a secondary axis, 3-D charts kept through PPTX and drawn with a simple depth; a chart gallery by family ([chart-type-parity.md](docs/chart-type-parity.md)) |
 | 2026-10-12 | Chart data editing for every chart type: data table per type (categories, X/Y, bubble sizes, stock and combo roles), cell edits with decimal comma and gaps, paste from spreadsheets, insert/delete/move rows and series, Switch Row/Column, one undo step per cell; the embedded workbook follows added or removed series and points instead of being rebuilt |
 | 2026-10-12 | Chart formatting: Format pane Chart Options per element (fonts, fills, borders, legend, axes, gridlines, number formats, data labels, series, markers, points), Chart Design Add Chart Element, Quick Layout, Change Colors and Chart Styles, Chart Format tab; rendered and round-tripped through PPTX |
@@ -158,6 +159,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Progress log: `.deck` folder format (#220) |
 | 2026-10-12 | minor | Progress log: every LibreOffice chart type and variant |
 | 2026-10-12 | minor | Progress log: chart data editing for every chart type |
 | 2026-10-12 | minor | Progress log: chart formatting on every chart type |
