@@ -1,6 +1,6 @@
 # Where DeckCraft falls short of PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (core-workflow alpha gate added; stage stays alpha; previous: major, first itemized gap list; full re-measure against PowerPoint for Mac 16.113.4 and the open GitHub issues) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (vector PDF export landed, gap closed; previous: minor, core-workflow alpha gate added; stage stays alpha; before that: major, first itemized gap list; full re-measure against PowerPoint for Mac 16.113.4 and the open GitHub issues) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every known shortfall, one entry each, ranked by how much it stops someone who presents with
 PowerPoint from switching. This is the work list: pick from the top. Numbers are summarized in
@@ -13,7 +13,7 @@ tests (calibration in [target-app-parity.md](target-app-parity.md#calibration-ho
 When a gap closes, delete its entry, update the parity doc it points to, and add a line to the
 revision history.
 
-## Ranked: the top 15
+## Ranked: the top 14
 
 | # | Gap | Category | Beta | Hours | Doc |
 |---|---|---|:-:|---|---|
@@ -30,8 +30,7 @@ revision history.
 | 11 | Charts: data grid editing, elements, `chartex` types | Feature | B (data, elements) | 12–20 | [parity-checklist.md](parity-checklist.md) |
 | 12 | Format Shape pane thinner than PowerPoint's | UI/UX | B | 6–10 | [ui-parity.md](ui-parity.md) |
 | 13 | No native macOS menu bar | UI/UX | B | 3–5 | [ui-parity.md](ui-parity.md) |
-| 14 | PDF export rasterizes slide artwork | File format | B | 5–8 | [file-format-parity.md](file-format-parity.md) |
-| 15 | Slides rasterize on the CPU; no performance baseline | Performance / hardware | | 15–30 | [hardware-parity.md](hardware-parity.md) |
+| 14 | Slides rasterize on the CPU; no performance baseline | Performance / hardware | | 15–30 | [hardware-parity.md](hardware-parity.md) |
 
 ## Stability
 
@@ -103,12 +102,6 @@ Detail in [file-format-parity.md](file-format-parity.md).
 - **Evidence:** PowerPoint opens and saves `.odp`.
 - **Impact:** LibreOffice users and public-sector exchange.
 - **Estimate:** 12–20 h (read and write the common subset).
-
-### PDF export rasterizes slide artwork
-- **Evidence:** `crates/pdf` places each slide as an image under a selectable text layer, links and
-  bookmarks.
-- **Impact:** large PDFs; blurry when zoomed or printed.
-- **Estimate:** 5–8 h (vector paths, fills and text through the PDF writer). **Beta blocker.**
 
 ### No printing
 - **Evidence:** checklist row "Print" is missing; PR #66 (browser print) is open.
@@ -247,5 +240,6 @@ Detail in [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Closed "PDF export rasterizes slide artwork": slides export as vector paths, real text and embedded pictures; only blur effects and patterns rasterize, per element |
 | 2026-10-10 | minor | Noted that no gap blocks alpha (core-workflow gate passes) |
 | 2026-10-10 | major | Created: every gap from the 2026-10-10 re-measure and the 16 open GitHub issues, ranked, with beta blockers marked |
