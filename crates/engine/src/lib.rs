@@ -9,8 +9,8 @@
 
 pub mod cmd;
 pub mod connect;
-pub mod fonts;
 pub mod folder;
+pub mod fonts;
 pub mod guard;
 pub mod keys;
 pub mod links;

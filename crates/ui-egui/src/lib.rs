@@ -49,7 +49,8 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// Platform services injected by the host (desktop or web).
 #[derive(Default)]
 pub struct Services {
-    /// Open-file dialog for a purpose (`open`, `picture`, `audio`, `video`) → path.
+    /// Open-file dialog for a purpose (`open`, `picture`, `audio`, `video`; `folder` picks a
+    /// folder) → path.
     pub pick_open: Option<PickFn>,
     /// Save dialog with a suggested name → path.
     pub pick_save: Option<PickFn>,
@@ -164,10 +165,11 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("app.palette", "Command Palette", Some("Cmd+Shift+P"), "{}"),
     ("app.preferences", "Preferences…", Some("Cmd+,"), "{}"),
     ("app.openDialog", "Open…", None, "{purpose?}"),
+    ("app.openFolderDialog", "Open Folder…", None, "{}"),
     ("app.insertPictureDialog", "Picture from File…", None, "{}"),
     ("app.insertAudioDialog", "Audio from File…", None, "{}"),
     ("app.insertVideoDialog", "Video from File…", None, "{}"),
-    ("app.saveAsDialog", "Save As…", None, "{}"),
+    ("app.saveAsDialog", "Save As…", None, "{format?: deckcraft|pptx|deck}"),
     ("app.exportDialog", "Export…", None, "{}"),
     ("app.dialog", "Open Dialog", None, "{id}"),
     ("app.links", "Community Links", None, "{}"),
@@ -354,7 +356,7 @@ impl SlideApp {
     }
 
     /// Exports the active presentation as `fmt` (`pdf`, `png`, `pngAll`, `jpeg`, `pptx`,
-    /// `deckcraft`, `outline`) through `file.export`: the save picker on the desktop, a download
+    /// `deckcraft`, `deck`, `outline`) through `file.export`: the save picker on the desktop, a download
     /// on the web. `extra` adds `file.export` params (the PDF's layout, slides…). The
     /// presentation keeps its own file. Returns whether a file was written or handed over.
     pub fn export_as(&mut self, fmt: &str, extra: Value) -> bool {
@@ -367,6 +369,7 @@ impl SlideApp {
             "pptx" => ("pptx", "pptx", false),
             "outline" | "txt" => ("txt", "outline", false),
             "deckcraft" => ("deckcraft", "deckcraft", false),
+            "deck" => ("deck", "deck", false),
             other => {
                 self.set_status(format!("DeckCraft can't export “{other}”"));
                 return false;
@@ -386,6 +389,10 @@ impl SlideApp {
                 }
                 Err(_) => false,
             };
+        }
+        if format == "deck" {
+            self.set_status("Exporting a .deck folder isn't available in the browser");
+            return false;
         }
         let Some(doc) = self.session.active().map(|d| d.doc.clone()) else { return false };
         let bytes = match format {
@@ -537,11 +544,15 @@ impl SlideApp {
             "app.about" => self.dialog = Some(dialogs::Dialog::new("about")),
             "app.palette" => self.palette = Some((String::new(), 0)),
             "app.preferences" => self.dialog = Some(dialogs::Dialog::new("preferences")),
-            "app.openDialog" => self.pick_and_open(),
+            "app.openDialog" => self.pick_and_open("open"),
+            "app.openFolderDialog" => self.pick_and_open("folder"),
             "app.insertPictureDialog" => self.pick_and_insert("picture", "insert.picture"),
             "app.insertAudioDialog" => self.pick_and_insert("audio", "insert.audio"),
             "app.insertVideoDialog" => self.pick_and_insert("video", "insert.video"),
-            "app.saveAsDialog" => self.save_as_dialog("deckcraft"),
+            "app.saveAsDialog" => {
+                let format = p.get("format").and_then(Value::as_str).map(String::from).unwrap_or_else(|| self.native_format().to_string());
+                self.save_as_dialog(&format);
+            }
             "app.exportDialog" => self.dialog = Some(dialogs::Dialog::new("export")),
             "app.dialog" => {
                 let d = p.get("id").and_then(Value::as_str).ok_or("missing `id`")?;
@@ -563,14 +574,25 @@ impl SlideApp {
         }
     }
 
-    fn pick_and_open(&mut self) {
+    fn pick_and_open(&mut self, purpose: &str) {
         if let Some(pick) = self.services.pick_open.as_mut() {
-            if let Some(path) = pick("open") {
-                let _ = self.open_path(&path);
+            if let Some(path) = pick(purpose)
+                && let Err(e) = self.open_path(&path)
+            {
+                self.set_status(e);
             }
+        } else if purpose == "folder" {
+            self.set_status("Opening a .deck folder isn't available in the browser: open a .deckcraft file instead");
         } else if let Some(f) = self.services.open_async.as_mut() {
             f("open");
         }
+    }
+
+    /// The native format the active presentation saves in: `deck` when it came from a `.deck`
+    /// folder, else `deckcraft`.
+    fn native_format(&self) -> &'static str {
+        let folder = self.session.active().and_then(|d| d.path.as_deref()).is_some_and(|p| deckcraft_engine::cmd::file::format_for_path(p) == "deck");
+        if folder { "deck" } else { "deckcraft" }
     }
 
     pub fn open_path(&mut self, path: &str) -> Result<(), String> {
@@ -603,7 +625,11 @@ impl SlideApp {
 
     pub fn save_as_dialog(&mut self, format: &str) {
         let name = self.session.active().map(|d| d.title()).unwrap_or_else(|| "Presentation".into());
-        let ext = if format == "pptx" { "pptx" } else { "deckcraft" };
+        let ext = match format {
+            "pptx" => "pptx",
+            "deck" => "deck",
+            _ => "deckcraft",
+        };
         let suggested = format!("{name}.{ext}");
         if let Some(pick) = self.services.pick_save.as_mut() {
             if let Some(path) = pick(&suggested) {
@@ -616,6 +642,8 @@ impl SlideApp {
                     Err(e) => self.set_status(e.to_string()),
                 }
             }
+        } else if ext == "deck" {
+            self.set_status("Saving a .deck folder isn't available in the browser: save a .deckcraft file instead");
         } else if let Some(dl) = self.services.download.as_mut()
             && let Some(d) = self.session.active()
         {
@@ -647,7 +675,8 @@ impl SlideApp {
                 Err(e) => self.set_status(e.to_string()),
             }
         } else {
-            self.save_as_dialog("deckcraft");
+            let format = self.native_format();
+            self.save_as_dialog(format);
         }
     }
 
@@ -665,7 +694,8 @@ impl SlideApp {
                 UiRequest::Message { text } => self.set_status(text),
                 UiRequest::PickFile { purpose } => {
                     if purpose == "saveAs" {
-                        self.save_as_dialog("deckcraft");
+                        let format = self.native_format();
+                        self.save_as_dialog(format);
                     }
                 }
                 UiRequest::Media { action, shape, ms } => {
@@ -775,6 +805,14 @@ impl SlideApp {
         // delivers them through `Services::inbox`.
         #[cfg(not(target_arch = "wasm32"))]
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
+            // A dropped `.deck` folder (or its deck.json) opens as a presentation.
+            let path = f.path().to_string_lossy().to_string();
+            if deckcraft_engine::folder::folder_to_open(&path).is_some() {
+                if let Err(e) = self.open_path(&path) {
+                    self.set_status(e);
+                }
+                continue;
+            }
             let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped file".into());
             match f.bytes() {
                 Ok(bytes) => self.open_or_insert_bytes(&name, &bytes),
@@ -1321,6 +1359,44 @@ mod tests {
         harness.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         harness.run_steps(2);
         assert_eq!(harness.state().dialog.as_ref().map(|d| d.id.as_str()), Some("export"));
+    }
+
+    /// Save As offers the folder format, Open Folder opens it, and Save As then suggests `.deck`.
+    #[test]
+    fn save_as_and_open_a_deck_folder_through_the_dialogs() {
+        use std::sync::{Arc, Mutex};
+        let dir = std::env::temp_dir().join(format!("deckcraft-ui-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let deck = dir.join("Talk.deck").to_string_lossy().to_string();
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let services = |asked: &Arc<Mutex<Vec<String>>>| {
+            let (a, b) = (asked.clone(), asked.clone());
+            let deck = deck.clone();
+            let deck2 = deck.clone();
+            Services {
+                pick_open: Some(Box::new(move |purpose: &str| {
+                    a.lock().unwrap().push(format!("open:{purpose}"));
+                    Some(deck.clone())
+                })),
+                pick_save: Some(Box::new(move |name: &str| {
+                    b.lock().unwrap().push(format!("save:{name}"));
+                    Some(deck2.clone())
+                })),
+                ..Default::default()
+            }
+        };
+        let mut app = SlideApp::new(Session::with_new(), services(&asked));
+        app.run("app.saveAsDialog", json!({"format": "deck"})).unwrap();
+        assert!(std::path::Path::new(&deck).join("deck.json").is_file());
+        assert_eq!(app.ui.recent.first(), Some(&deck));
+
+        let mut other = SlideApp::new(Session::new(), services(&asked));
+        other.run("app.openFolderDialog", json!({})).unwrap();
+        assert_eq!(other.session.active().and_then(|d| d.path.clone()), Some(deck.clone()));
+        other.run("app.saveAsDialog", json!({})).unwrap();
+        assert_eq!(*asked.lock().unwrap(), vec!["save:Presentation1.deck".to_string(), "open:folder".into(), "save:Talk.deck".into()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

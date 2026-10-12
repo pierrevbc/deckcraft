@@ -409,6 +409,7 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ("PNG images (all slides)", "pngAll"),
                 ("JPEG image (current slide)", "jpeg"),
                 ("PowerPoint Presentation (.pptx)", "pptx"),
+                ("DeckCraft folder (.deck)", "deck"),
                 ("Outline (.txt)", "outline"),
             ] {
                 if ui.radio(fmt == f, l).clicked() {

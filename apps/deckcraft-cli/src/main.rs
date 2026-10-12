@@ -1,9 +1,9 @@
 //! Headless DeckCraft.
 //!
 //! ```text
-//! deckcraft-cli info FILE                       # slides, titles, layouts (JSON)
+//! deckcraft-cli info FILE                       # slides, titles, layouts (JSON); FILE may be a .deck folder
 //! deckcraft-cli render (FILE | --sample) [--slide N | --all] [--scale S] OUT.png|OUT_DIR
-//! deckcraft-cli convert IN OUT                  # .deckcraft ⇄ .pptx, outline .txt, .png (first slide)
+//! deckcraft-cli convert IN OUT                  # .deckcraft ⇄ .pptx ⇄ .deck folder, outline .txt, .png (first slide)
 //! deckcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--save OUT] [--export OUT] [--print]
 //! deckcraft-cli commands [FILTER]               # list commands (JSON)
 //! deckcraft-cli describe ID                     # one command
