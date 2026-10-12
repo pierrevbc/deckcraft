@@ -2,6 +2,7 @@
 
 pub mod animation;
 pub mod arrange;
+pub mod chart_format;
 pub mod chartdata;
 pub mod design;
 pub mod edit;
@@ -131,6 +132,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(slide::specs());
         v.extend(insert::specs());
         v.extend(chartdata::specs());
+        v.extend(chart_format::specs());
         v.extend(shape::specs());
         v.extend(arrange::specs());
         v.extend(selection::specs());

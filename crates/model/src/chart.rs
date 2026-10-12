@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::MediaId;
+pub use crate::chart_format::{ChartFormat, SeriesFormat};
 use crate::style::{ColorRef, Fill, Line};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -568,6 +569,9 @@ pub struct Series {
     /// Combo charts: this series' own type.
     pub kind: Option<ChartType>,
     pub secondary_axis: bool,
+    /// Marker size and colours, invert if negative, pie explosion.
+    #[serde(skip_serializing_if = "SeriesFormat::is_default")]
+    pub format: SeriesFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -593,6 +597,9 @@ pub struct Chart {
     pub vary_colors: bool,
     pub y_min: Option<f64>,
     pub y_max: Option<f64>,
+    /// Fonts, element boxes, axes, gridlines and data label options.
+    #[serde(skip_serializing_if = "ChartFormat::is_default")]
+    pub format: ChartFormat,
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -673,6 +680,7 @@ impl Default for Chart {
             vary_colors: false,
             y_min: None,
             y_max: None,
+            format: ChartFormat::default(),
             raw: None,
             workbook: None,
             source: None,
