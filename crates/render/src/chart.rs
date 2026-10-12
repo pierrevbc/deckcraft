@@ -988,7 +988,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
         let range = |v: &[f64]| v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(*x), b.max(*x)));
         let (xl, xh) = range(&all_x);
         let (yl, yh) = range(&all_y);
-        let xs = format::axis_scale(cat_ax, xl, xh, false, (None, None));
+        let xs = format::axis_scale(cat_ax, xl, xh, false, (cat_ax.min, cat_ax.max));
         let ys = format::axis_scale(val_ax, yl, yh, c.kind == ChartType::Bubble, (c.y_min, c.y_max));
         let fr = self.frame(area, Across::Values(xs), ys, None, (false, false));
         let plot = fr.plot;
@@ -1552,6 +1552,8 @@ mod tests {
                 // explosions, NaN angles.
                 c.format.val_axis.log_base = Some(10.0);
                 c.format.val_axis.major_unit = Some(1e-300);
+                c.format.cat_axis.min = Some(f64::NAN);
+                c.format.cat_axis.max = Some(-1e300);
                 c.format.cat_axis.reverse = true;
                 c.format.cat_axis.rotation = Some(f64::INFINITY);
                 c.format.first_slice_angle = f64::NAN;

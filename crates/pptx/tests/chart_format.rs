@@ -248,6 +248,17 @@ fn styles_and_palettes_write_their_colours() {
     assert!((after.hole_size - 0.65).abs() < 1e-9);
 }
 
+#[test]
+fn scatter_x_axis_bounds_round_trip() {
+    let s = formatted(
+        "scatter",
+        &[("chart.format.axis", json!({"axis": "category", "min": 0.5, "max": 5, "majorUnit": 0.5, "numFmt": "0.0", "majorTick": "out"}))],
+    );
+    let (before, after, xml) = round_trip(&s);
+    assert_eq!(after.format.cat_axis, before.format.cat_axis, "{xml}");
+    assert_eq!((after.format.cat_axis.min, after.format.cat_axis.max), (Some(0.5), Some(5.0)));
+}
+
 /// Label positions a chart type refuses are left out, so PowerPoint opens the file.
 #[test]
 fn label_positions_follow_the_chart_type() {

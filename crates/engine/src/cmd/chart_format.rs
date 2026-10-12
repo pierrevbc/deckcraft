@@ -385,17 +385,19 @@ fn axis(s: &mut Session, p: &Value) -> Result<Value> {
         p.get("numFmt").map(|v| v.as_str().map(str::trim).filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("general")).map(String::from));
     let title = p.get("title").map(|v| v.as_str().map(String::from));
     let value_axis = matches!(name.as_str(), "value" | "val" | "vertical" | "y");
-    if !value_axis && (min.is_some() || max.is_some()) {
-        return Err(bad(CMD, "only the value axis has bounds"));
-    }
     with_chart(s, p, CMD, |c| {
+        let xy = c.kind.is_xy();
+        if !value_axis && !xy && (min.is_some() || max.is_some()) {
+            return Err(bad(CMD, "only value axes (and the X axis of scatter and bubble charts) have bounds"));
+        }
+        let (lo, hi) = if value_axis { (&mut c.y_min, &mut c.y_max) } else { (&mut c.format.cat_axis.min, &mut c.format.cat_axis.max) };
         if let Some(v) = min {
-            c.y_min = v;
+            *lo = v;
         }
         if let Some(v) = max {
-            c.y_max = v;
+            *hi = v;
         }
-        if let (Some(a), Some(b)) = (c.y_min, c.y_max)
+        if let (Some(a), Some(b)) = (*lo, *hi)
             && a >= b
         {
             return Err(bad(CMD, "minimum must be below maximum"));
@@ -928,6 +930,11 @@ mod tests {
         let c = chart(&s, id);
         assert_eq!((c.y_min, c.y_max, c.format.val_axis.log_base, c.format.val_axis.num_fmt.clone()), (None, None, Some(10.0), None));
         assert!(s.execute("chart.format.axis", &json!({"axis": "category", "min": 1})).is_err());
+        // Scatter charts have X axis bounds.
+        let (mut sc, sid) = session_with_chart("scatter");
+        sc.execute("chart.format.axis", &json!({"axis": "category", "min": 0.5, "max": 5, "majorUnit": 0.5})).unwrap();
+        let x = chart(&sc, sid).format.cat_axis;
+        assert_eq!((x.min, x.max, x.major_unit), (Some(0.5), Some(5.0), Some(0.5)));
         assert!(s.execute("chart.format.axis", &json!({"axis": "value", "min": 5, "max": 1})).is_err());
         assert!(s.execute("chart.format.axis", &json!({"axis": "value", "majorTick": "sideways"})).is_err());
         assert!(s.execute("chart.format.axis", &json!({"axis": "z"})).is_err());
