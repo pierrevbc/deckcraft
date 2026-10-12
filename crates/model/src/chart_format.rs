@@ -117,6 +117,12 @@ pub enum Crosses {
 pub struct AxisFormat {
     /// Hidden (`c:delete`): no line, ticks or labels. Gridlines stay.
     pub hidden: bool,
+    /// Bounds of the X axis of scatter and bubble charts (the value axis' bounds are
+    /// [`Chart::y_min`](crate::chart::Chart::y_min) and [`Chart::y_max`](crate::chart::Chart::y_max)).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
     /// Values (or categories) in reverse order.
     pub reverse: bool,
     /// Logarithmic scale with this base (value axes).
