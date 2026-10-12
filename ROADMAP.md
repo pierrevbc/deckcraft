@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~20 points and ~120–210 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text box frame drag while editing; previous: minor, SmartArt text on its text rectangle) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (right click selects; previous: minor, text box frame drag while editing) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 DeckCraft aims at full PowerPoint parity, and to be better: faster, open (a documented zip+JSON
 format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and available everywhere
@@ -128,6 +128,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Canvas: a right click selects the shape under the pointer before the context menu opens (`contextclick` pointer kind for the control channel and MCP); in edited text the menu offers text items |
 | 2026-10-12 | Canvas: dragging the frame of a text box being edited moves it (move cursor on the frame, one undo step); the caret zone follows rotated boxes |
 | 2026-10-12 | SmartArt import: text laid out on its `dsp:txXfrm` text rectangle, not squeezed into the shape (list layouts no longer show text in narrow columns) |
 | 2026-10-12 | PPTX: chart workbooks kept on export (byte for byte when the data is unchanged, changed cells updated in place otherwise), and generated for charts made in DeckCraft |
