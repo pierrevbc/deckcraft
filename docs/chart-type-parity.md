@@ -1,6 +1,6 @@
 # Chart type parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (data editing and formatting per type; previous: major, created; every LibreOffice Impress chart type and variant audited, then filled in) · **Target:** the chart types of LibreOffice Impress 26 and their PowerPoint counterparts
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (built on upstream's chart legend, combo, axis format and text size work; previous: minor, data editing and formatting per type; before that: major, created; every LibreOffice Impress chart type and variant audited, then filled in) · **Target:** the chart types of LibreOffice Impress 26 and their PowerPoint counterparts
 
 Every chart type and variant LibreOffice Impress offers in its chart type dialog, with
 PowerPoint's name where it has one, and what DeckCraft does with it: model, drawing, PPTX read,
@@ -16,8 +16,10 @@ and `chart.type {type}` as preset ids (`column3d`, `lineSmooth`, `stockOhlc`,
 
 ## Audit
 
-Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this work started from
-(0.6.0, the chart workbook fix and the first chart data editor).
+Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this work stands on:
+upstream `main` (525ec7b, with its legend placement #262, combo charts 5c82c08, axis number
+formats ce1c7b7 and chart text sizes #358), the chart workbook fix (#241) and the first chart
+data editor (#195).
 
 | Type / variant | Model | Draw | PPTX read | PPTX write | Gallery | Before (model / draw / read / write / gallery) |
 |---|---|---|---|---|---|---|
@@ -49,9 +51,9 @@ Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this wor
 | Stock: open-high-low-close (candlestick) | Y | Y | Y | Y | Y | N / N / read as high-low-close / N / N |
 | Stock: volume-high-low-close | Y | Y | Y | Y | Y | N / N / read as a combo / N / N |
 | Stock: volume-open-high-low-close | Y | Y | Y | Y | Y | N / N / read as a combo / N / N |
-| Column and line | Y | Y | Y | Y | Y | Y / N (all drawn as lines) / Y / Y / N |
-| Stacked columns and line | Y | Y | Y | Y | Y | Y / N / Y / Y / N |
-| Secondary value axis | Y | Y | Y | Y | Y | field only / N / N / N / N |
+| Column and line | Y | Y | Y | Y | Y | Y / Y (5c82c08) / Y / Y / N |
+| Stacked columns and line | Y | Y | Y | Y | Y | Y / Y (5c82c08) / Y / Y / N |
+| Secondary value axis | Y | Y | Y | Y | Y | Y / Y (5c82c08) / Y (5c82c08, ce1c7b7) / N / N |
 | 3-D column and bar (clustered, stacked, 100%, deep) | Y | P (simple depth) | Y | Y | Y | N / N / read as 2-D / N / N |
 | Cylinder, cone, pyramid bars | Y | P (shape outlines) | Y | Y | Y | N / N / read as 2-D / N / N |
 | 3-D pie, exploded 3-D pie | Y | Y (tilted, with rim) | Y | Y | Y | N / N / read as 2-D / N / N |
@@ -60,6 +62,25 @@ Legend: **Y** works, **P** partial, **N** missing. "Before" is the tree this wor
 
 Before this work, an imported chart left unchanged kept its original chart part, so 3-D and other
 unmodelled variants survived a plain open-and-save; any edit lost them. Now the model holds them.
+
+## Built on upstream
+
+Upstream `main` draws and reads some of what this work covers; DeckCraft keeps upstream's model
+fields and code for them, and the gallery, data editor, format commands, Format pane and PPTX
+writer set and write those fields:
+
+- Legend position and overlay (#262): `Chart::legend`, `Chart::legend_overlay`, laid out by the
+  renderer's `legend_layout`.
+- Combo charts with columns, lines and a secondary axis (5c82c08): `Chart::series_kind`,
+  `Chart::on_secondary`, `Chart::axis_range`; the reader's secondary-axis detection (by axis
+  position, not plot group order).
+- Axis number formats, automatic major unit and hidden axes (ce1c7b7): `Chart::y_format`,
+  `y_major`, `y_hidden` and the secondary axis' `y2_*`, `Chart::lang`, `Series::number_format`
+  for data labels, `deckcraft_model::numfmt` (here also scientific notation and halves rounded
+  away from zero) and `Chart::axis_scale`'s automatic unit, which every value axis uses.
+- Chart text sizes from the file (#358): `Chart::text_size` and `Chart::title_size`; the legend,
+  axes and data labels have their own sizes on top (`ChartFormat`), and a chart's own `c:txPr`
+  size is its text size when it sets one.
 
 ## Data and formatting per type
 
@@ -76,7 +97,7 @@ commands format every type (`crates/model/src/chart_format.rs`).
 | XY scatter, bubble | X shared or per series, Y per series, bubble sizes | lines and markers per variant, X axis bounds, units, log scale and reversal, both axes' labels and gridlines |
 | Radar | categories, a column per series | lines, markers on the variants with markers, filled shapes, value axis scale and labels |
 | Stock | prices by role (Volume, Open, High, Low, Close as the variant asks) | volume columns' fills, axes, labels; the high-low lines and up-down bars keep their default look |
-| Combo | categories, a column per series, each showing its series type | each series as its type, primary axis formatting; the secondary axis keeps its defaults |
+| Combo | categories, a column per series, each showing its series type | each series as its type, primary axis formatting; the secondary axis' bounds, major unit, number format and visibility |
 
 The chart type says whether a line, scatter or radar series shows markers, the series which
 symbol: picking a marker on a type without them turns it into its variant with markers. A pie's
@@ -122,8 +143,8 @@ series explosion is the exploded type's explosion.
   are point formatting (`c:dPt/c:explosion`).
 - LibreOffice's "stack series" for radar charts and "sort by X values" for scatter charts are not
   modelled.
-- Not formatted yet: the secondary value axis (written with its defaults), the high-low lines and
-  up-down bars of stock charts, bubble scale, the pie of pie's connector lines, 3-D walls and floor.
+- Not formatted yet: the secondary value axis' line, tick marks, font and title (its bounds,
+  unit, number format and visibility are), the high-low lines and up-down bars of stock charts, bubble scale, the pie of pie's connector lines, 3-D walls and floor.
 - Markers are on or off per type: a line chart where only some series show markers reads back
   without markers.
 
@@ -131,5 +152,6 @@ series explosion is the exploded type's explosion.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Rebased on upstream main: legend overlay (#262), combo charts and the secondary axis (5c82c08), axis number formats, units and hidden axes (ce1c7b7), text sizes (#358) are upstream's; the secondary axis' bounds, unit, number format and visibility are formatted and written |
 | 2026-10-12 | minor | Data table and formatting per type; verification and limits after the data and formatting work |
 | 2026-10-12 | major | Created: audit of the LibreOffice Impress chart types and variants, all filled in (model, drawing, PPTX read and write, gallery) |

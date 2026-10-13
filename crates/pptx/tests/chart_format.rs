@@ -51,15 +51,22 @@ fn round_trip(s: &Session) -> (Chart, Chart, String) {
     (before, after, xml)
 }
 
-/// The formatting of a chart, for comparison: everything but data and import bookkeeping.
+/// A number format as it shows: General is no format.
+fn shown_format(f: &Option<String>) -> Option<&str> {
+    f.as_deref().filter(|f| !f.eq_ignore_ascii_case("general"))
+}
+
+/// The formatting of a chart, for comparison: everything but data and import bookkeeping. A
+/// series' label number format counts where its labels show (it is kept with them).
 fn looks(c: &Chart) -> Value {
     let series: Vec<Value> = c
         .series
         .iter()
         .map(|s| {
+            let labels = s.data_labels.unwrap_or(c.data_labels);
             json!({
                 "fill": s.fill, "line": s.line, "points": s.point_fills, "labels": s.data_labels, "smooth": s.smooth,
-                "marker": s.marker, "format": s.format,
+                "marker": s.marker, "format": s.format, "numberFormat": if labels { shown_format(&s.number_format) } else { None },
             })
         })
         .collect();
@@ -69,6 +76,9 @@ fn looks(c: &Chart) -> Value {
         "title": c.title, "legend": c.legend, "labels": c.data_labels, "gridlines": c.gridlines && axes, "axisTitles": c.axis_titles,
         "plotFill": c.plot_fill, "chartFill": c.chart_fill, "gap": c.gap_width, "hole": c.hole_size, "vary": c.vary_colors,
         "min": c.y_min, "max": c.y_max, "format": c.format, "series": series,
+        "legendOverlay": c.legend_overlay, "textSize": c.text_size, "titleSize": c.title_size,
+        "yAxis": [c.y_major, shown_format(&c.y_format), c.y_hidden],
+        "y2Axis": [c.y2_min, c.y2_max, c.y2_major, shown_format(&c.y2_format), c.y2_hidden],
     })
 }
 
@@ -164,6 +174,57 @@ fn column_chart_formatting_round_trips() {
         // Skip over this element's own content (gridlines and titles hold `c:spPr`, `c:txPr`).
         at += i + tag.len();
     }
+}
+
+/// What upstream's chart reader reads (legend overlay, value axes' number formats, units and
+/// deletion, a combo chart's secondary axis, text sizes, the chart's language) is what the format
+/// commands set and the writer writes.
+#[test]
+fn upstream_chart_fields_round_trip() {
+    let s = formatted(
+        "columnLineSecondary",
+        &[
+            ("chart.format.legend", json!({"position": "left", "overlay": true})),
+            ("chart.format.element", json!({"element": "chartArea", "font": {"size": 12}})),
+            ("chart.format.element", json!({"element": "title", "font": {"size": 20, "bold": true}})),
+            ("chart.format.element", json!({"element": "legend", "font": {"size": 9}})),
+            ("chart.format.axis", json!({"axis": "value", "numFmt": "#,##0", "majorUnit": 2})),
+            ("chart.format.axis", json!({"axis": "secondary", "min": 0, "max": 80, "majorUnit": 20, "numFmt": "0.0", "visible": false})),
+            ("chart.format.labels", json!({"show": true, "numFmt": "0.0"})),
+        ],
+    );
+    let (before, after, xml) = round_trip(&s);
+    let mut diffs = vec![];
+    json_diff(&looks(&before), &looks(&after), "", &mut diffs);
+    assert!(
+        diffs.is_empty(),
+        "{diffs:?}
+{xml}"
+    );
+    assert_eq!((after.text_size, after.title_size, after.legend_overlay), (Some(12.0), Some(20.0), true));
+    assert_eq!((after.y_format.as_deref(), after.y_major), (Some("#,##0"), Some(2.0)));
+    assert_eq!(
+        (after.y2_min, after.y2_max, after.y2_major, after.y2_format.as_deref(), after.y2_hidden),
+        (Some(0.0), Some(80.0), Some(20.0), Some("0.0"), true)
+    );
+    assert!(after.series.iter().any(|s| s.secondary_axis) && after.series.iter().all(|s| s.number_format.as_deref() == Some("0.0")), "{xml}");
+    assert_eq!(after.format.legend_text.size, Some(9.0));
+    for frag in
+        [r#"<c:legendPos val="l"/><c:overlay val="1"/>"#, r##"<c:numFmt formatCode="#,##0" sourceLinked="0"/>"##, r#"<c:majorUnit val="20"/>"#]
+    {
+        assert!(xml.contains(frag), "{frag} missing: {xml}");
+    }
+    // The chart's language comes back too.
+    let mut p: Presentation = (*s.doc().expect("doc").doc).clone();
+    for sl in &mut p.slides {
+        for sh in &mut std::sync::Arc::make_mut(sl).shapes {
+            if let ShapeKind::Chart(c) = &mut sh.kind {
+                c.lang = Some("ru-RU".into());
+            }
+        }
+    }
+    let back = chart_of(&deckcraft_pptx::import(&deckcraft_pptx::export(&p).expect("export")).expect("import"));
+    assert_eq!(back.lang.as_deref(), Some("ru-RU"));
 }
 
 #[test]

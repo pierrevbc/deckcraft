@@ -78,16 +78,79 @@ fn marker_symbol(k: ChartType, s: &Series) -> Option<&str> {
     }
 }
 
+/// Where the legend goes for `c:legendPos`, and the plot area left over.
+/// `size` is the legend block (width, height); the result is its top-left corner and the plot area.
+/// `r` (also the OOXML default and the fallback for unknown values) and `l` are vertical stacks centred
+/// on the area, `tr` is a vertical stack in the top-right corner, `t` and `b` are centred rows.
+/// An overlaid legend leaves the plot area as it was.
+fn legend_layout(pos: &str, size: (f64, f64), area: Rect, base: f64, overlay: bool) -> (Point, Rect) {
+    let (lw, lh) = size;
+    let gap = base * 0.5;
+    let cx = (area.x0 + area.x1) / 2.0;
+    let cy = ((area.y0 + area.y1) / 2.0 - lh / 2.0).max(area.y0);
+    let mut plot = area;
+    let origin = match pos {
+        "b" => {
+            plot.y1 = area.y1 - lh - gap;
+            Point::new(cx - lw / 2.0, area.y1 - lh)
+        }
+        "t" => {
+            plot.y0 = area.y0 + lh + gap;
+            Point::new(cx - lw / 2.0, area.y0)
+        }
+        "l" => {
+            plot.x0 = area.x0 + lw + gap;
+            Point::new(area.x0, cy)
+        }
+        "tr" => {
+            plot.x1 = area.x1 - lw - gap;
+            Point::new(area.x1 - lw, area.y0)
+        }
+        _ => {
+            plot.x1 = area.x1 - lw - gap;
+            Point::new(area.x1 - lw, cy)
+        }
+    };
+    (origin, if overlay { area } else { plot })
+}
+
+/// A category label on two lines, split at its middle space or dash ("03.11.2025 - 09.11.2025").
+fn split_label(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mid = chars.len() / 2;
+    let best = chars.iter().enumerate().filter(|(_, c)| c.is_whitespace()).map(|(i, _)| i).min_by_key(|i| i.abs_diff(mid));
+    match best {
+        Some(i) if i > 0 && i + 1 < chars.len() => {
+            let (a, b) = chars.split_at(i);
+            format!("{}\n{}", a.iter().collect::<String>().trim_end(), b.iter().collect::<String>().trim_start())
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// As many major units as a value axis `len` long has room for labels (PowerPoint's automatic
+/// unit): a label every 1.9 text heights up a vertical axis, every 6 across a horizontal one.
+fn max_intervals(len: f64, base: f64, horizontal: bool) -> usize {
+    let per = if horizontal { base * 6.0 } else { base * 1.9 };
+    let n = (len / per.max(1e-9)).floor();
+    if n.is_finite() { n.clamp(2.0, 12.0) as usize } else { 2 }
+}
+
 pub fn draw(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f64) {
     let f = &c.format;
-    let base = (h.min(w) / 22.0).clamp(7.0, 18.0);
+    // The file's text sizes when it has them (PowerPoint draws chart text at them); otherwise a size
+    // that suits the chart.
+    let size = |s: Option<f64>| s.filter(|s| s.is_finite()).map(|s| s.clamp(1.0, 400.0));
+    let base = size(c.text_size).unwrap_or_else(|| (h.min(w) / 22.0).clamp(7.0, 18.0));
+    let title_size = size(c.title_size).unwrap_or(base * 1.4);
     let chart_text = format::base_text(rctx, c, base);
     if c.chart_fill.is_some() || f.chart_line.is_some() {
         format::element_box(ctx, rctx, c.chart_fill.as_ref(), f.chart_line.as_ref(), Rect::new(0.0, 0.0, w, h), m, f.rounded_corners);
     }
     let mut area = Rect::new(w * 0.04, h * 0.04, w * 0.96, h * 0.96);
     if let Some(t) = &c.title {
-        let tt = format::text(rctx, &f.title_text, &chart_text, base * 1.4, false);
+        let title_text = deckcraft_model::chart_format::ChartText { size: Some(title_size), ..f.title_text.clone() };
+        let tt = format::text(rctx, &title_text, &chart_text, title_size, false);
         let th = tt.size * 1.3;
         let tw = (tt.width(t) + tt.size).min(w);
         let r = Rect::new((w - tw) / 2.0, area.y0, (w + tw) / 2.0, area.y0 + th);
@@ -115,7 +178,7 @@ pub fn draw(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let k = series_kind(c, s);
+                let k = drawn_kind(c, s);
                 let lined = k.has_lines() || (k.is_radar() && k != ChartType::FilledRadar);
                 let fill = series_fill(rctx, c, i, Some(s));
                 if !lined {
@@ -133,7 +196,7 @@ pub fn draw(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, m: Affine, w: f64, h: f
             .collect()
     };
     let lt = format::text(rctx, &f.legend_text, &chart_text, base, false);
-    format::legend(ctx, rctx, c, &legend_items, &mut area, &lt, m, w);
+    format::legend(ctx, rctx, c, &legend_items, &mut area, &lt, m);
     let mut p = Painter::new(ctx, rctx, c, m, base, &chart_text);
     if pie {
         if c.kind.is_of_pie() {
@@ -158,14 +221,12 @@ enum Class {
     Area,
 }
 
-/// The type a series of a category chart is drawn as: its own in a combo chart.
-fn series_kind(c: &Chart, s: &Series) -> ChartType {
-    if c.kind != ChartType::Combo {
-        return c.kind;
-    }
-    match s.kind.unwrap_or(ChartType::Column) {
-        k if k.is_pie() || k.is_xy() || k == ChartType::Combo => ChartType::Column,
-        k if k.is_radar() || k.is_stock() => ChartType::Line,
+/// The type a series of a category chart is drawn as: its own in a combo chart
+/// ([`Chart::series_kind`]), as columns or lines for the types a combination can't hold.
+fn drawn_kind(c: &Chart, s: &Series) -> ChartType {
+    match c.series_kind(s) {
+        k if c.kind == ChartType::Combo && (k.is_pie() || k.is_xy()) => ChartType::Column,
+        k if c.kind == ChartType::Combo && (k.is_radar() || k.is_stock()) => ChartType::Line,
         k => k,
     }
 }
@@ -377,7 +438,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
     }
     /// The data label of point `i` (value `v`) of series `s` next to `q`.
     fn point_label(&mut self, s: &Series, v: f64, i: usize, q: Point, auto: LabelPos) {
-        let t = format::label_text(self.c, v, None, i, &s.name);
+        let t = format::label_text(self.c, s, v, None, i);
         let lt = self.t.labels.clone();
         let pos = self.c.format.labels.position.unwrap_or(auto);
         let r = format::point_label_rect(q, pos, lt.width(&t) + lt.size * 0.4, lt.size * 1.3, lt.size * 0.3);
@@ -479,7 +540,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
             if !self.labels_on(sl.s) {
                 continue;
             }
-            let t = format::label_text(c, sl.v, Some(sl.v / sl.total), sl.i, &sl.s.name);
+            let t = format::label_text(c, sl.s, sl.v, Some(sl.v / sl.total), sl.i);
             let pos = c.format.labels.position.unwrap_or(LabelPos::BestFit);
             let k = match pos {
                 _ if doughnut => (sl.r0 + sl.r1) / 2.0 / sl.r1,
@@ -592,7 +653,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
                 lt.color = Rgba::WHITE;
             }
             for (q, i, v) in marks {
-                let t = format::label_text(c, v, Some(v / total), i, &s.name);
+                let t = format::label_text(c, s, v, Some(v / total), i);
                 let r = Rect::from_center_size(q, (lt.width(&t) + lt.size * 0.4, lt.size * 1.3));
                 self.text(&t, r, &lt, Align::Center, Anchor::Middle, 0.0);
             }
@@ -609,8 +670,8 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
             return;
         }
         let (lo, hi) = c.value_range();
-        let sc = format::axis_scale(val_ax, lo, hi, true, (c.y_min, c.y_max));
         let r = (area.width().min(area.height()) / 2.0 - base * 1.6).max(4.0);
+        let sc = format::axis_scale(val_ax, lo, hi, true, (c.y_min, c.y_max, c.y_major), max_intervals(r, base, false), !c.kind.percent());
         let cen = area.center();
         let dir = if cat_ax.reverse { -1.0 } else { 1.0 };
         let angle = |i: usize| -std::f64::consts::FRAC_PI_2 + dir * i as f64 / ncat as f64 * std::f64::consts::TAU;
@@ -632,9 +693,9 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
                 let g = self.grid;
                 self.line(val_ax.major_grid_line.as_ref(), g, 0.75, &web, false);
             }
-            if !val_ax.hidden && val_ax.label_pos != Some(TickLabelPos::None) {
+            if !c.y_hidden && val_ax.label_pos != Some(TickLabelPos::None) {
                 let q = at(0, f);
-                let s = format::axis_number(*v, val_ax.num_fmt.as_deref(), false);
+                let s = format::value_label(c, false, *v, false);
                 self.text(
                     &s,
                     Rect::new(q.x - base * 3.2, q.y - base * 0.7, q.x - base * 0.3, q.y + base * 0.7),
@@ -715,22 +776,32 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
             Across::Values(_) => 1,
         };
         let (cat_t, val_t) = (self.t.cat.clone(), self.t.val.clone());
-        let val_labels = !val_ax.hidden && val_ax.label_pos != Some(TickLabelPos::None);
+        let val_labels = !c.y_hidden && val_ax.label_pos != Some(TickLabelPos::None);
+        let sec_labels = !c.y2_hidden;
         let cat_labels = !cat_ax.hidden && cat_ax.label_pos != Some(TickLabelPos::None);
         let ticks = primary.ticks();
-        let val_strings: Vec<String> = ticks.iter().map(|v| format::axis_number(*v, val_ax.num_fmt.as_deref(), pct.0)).collect();
+        let val_strings: Vec<String> = ticks.iter().map(|v| format::value_label(c, false, *v, pct.0)).collect();
         let sec_ticks = secondary.as_ref().map(Scale::ticks).unwrap_or_default();
-        let sec_strings: Vec<String> = sec_ticks.iter().map(|v| format::axis_number(*v, None, pct.1)).collect();
+        let sec_strings: Vec<String> = sec_ticks.iter().map(|v| format::value_label(c, true, *v, pct.1)).collect();
         let val_w = val_strings.iter().map(|s| val_t.width(s)).fold(0.0, f64::max) + base * 0.5;
         let sec_w = sec_strings.iter().map(|s| val_t.width(s)).fold(0.0, f64::max) + base * 0.5;
         // Category names, or the X axis' numbers, and where they go.
         let cat_strings: Vec<(String, Option<f64>)> = match &across {
             Across::Cats { n, .. } => c.categories.iter().take(*n).map(|s| (s.clone(), None)).collect(),
-            Across::Values(xs) => xs.ticks().into_iter().map(|v| (format::axis_number(v, cat_ax.num_fmt.as_deref(), false), Some(v))).collect(),
+            Across::Values(xs) => xs.ticks().into_iter().map(|v| (format::x_label(c, v), Some(v))).collect(),
         };
         let cat_rot = cat_ax.rotation.filter(|r| r.is_finite()).unwrap_or(0.0);
-        let cat_w = cat_strings.iter().map(|(s, _)| cat_t.width(s)).fold(0.0, f64::max);
-        let cat_h = if cat_rot != 0.0 { cat_w * cat_rot.to_radians().sin().abs() + cat_t.size * 1.2 } else { cat_t.size * 1.6 };
+        // Category labels wrap onto two lines when they don't fit their band (long date ranges).
+        let wraps = !horiz
+            && cat_rot == 0.0
+            && matches!(across, Across::Cats { .. })
+            && cat_strings.iter().any(|(s, _)| cat_t.width(s) > (area.width() * 0.85) / n as f64);
+        let cat_strings: Vec<(String, Option<f64>)> =
+            if wraps { cat_strings.into_iter().map(|(s, x)| (split_label(&s), x)).collect() } else { cat_strings };
+        let longest = |s: &str| s.split('\n').map(|l| cat_t.width(l)).fold(0.0, f64::max);
+        let cat_w = cat_strings.iter().map(|(s, _)| longest(s)).fold(0.0, f64::max);
+        let cat_h =
+            if cat_rot != 0.0 { cat_w * cat_rot.to_radians().sin().abs() + cat_t.size * 1.2 } else { cat_t.size * if wraps { 2.8 } else { 1.6 } };
         // Axis titles take room beside the axes.
         let (cat_title_t, val_title_t) = (self.t.cat_title.clone(), self.t.val_title.clone());
         let (bottom_title, left_title) = if horiz { (&c.axis_titles.1, &c.axis_titles.0) } else { (&c.axis_titles.0, &c.axis_titles.1) };
@@ -760,6 +831,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
         };
         let sec_gutter = match (&secondary, horiz) {
             (None, _) => 0.0,
+            (Some(_), _) if !sec_labels => base * 0.3,
             (Some(_), true) => val_t.size * 1.6,
             (Some(_), false) => sec_w,
         };
@@ -863,7 +935,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
             let primary = fr.primary.clone();
             value_labels(self, &primary, &ticks, &val_strings, val_labels_far, val_w, val_rot);
         }
-        if let Some(sec) = fr.secondary.clone() {
+        if let Some(sec) = fr.secondary.clone().filter(|_| sec_labels) {
             value_labels(self, &sec, &sec_ticks, &sec_strings, !val_labels_far, sec_w, 0.0);
         }
         // Category labels (or the X axis' numbers).
@@ -886,8 +958,8 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
                     let r = format::slanted(at, cat_t.width(name) + cat_t.size * 0.3, cat_t.size, cat_rot);
                     self.text(name, r, &cat_t, Align::Center, Anchor::Middle, cat_rot);
                 } else {
-                    let y = if high { plot.y0 - cat_t.size * 1.6 } else { plot.y1 + 3.0 };
-                    let r = Rect::new(mid - span / 2.0, y, mid + span / 2.0, y + cat_t.size * 1.6);
+                    let y = if high { plot.y0 - cat_h } else { plot.y1 + 3.0 };
+                    let r = Rect::new(mid - span / 2.0, y, mid + span / 2.0, y + cat_h);
                     self.text(name, r, &cat_t, Align::Center, Anchor::Top, 0.0);
                 }
             }
@@ -946,7 +1018,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
         // Scatter charts draw their Y axis line as their X axis line; category charts only when
         // it is formatted.
         let xy = matches!(fr.across, Across::Values(_));
-        if !val_ax.hidden && (xy || val_ax.line.is_some() || val_ax.major_tick.is_some() || val_ax.minor_tick.is_some()) {
+        if !c.y_hidden && (xy || val_ax.line.is_some() || val_ax.major_tick.is_some() || val_ax.minor_tick.is_some()) {
             let mut ax = BezPath::new();
             let mut tk = BezPath::new();
             let pos = fr.val_line_pos;
@@ -991,8 +1063,25 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
         let range = |v: &[f64]| v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(*x), b.max(*x)));
         let (xl, xh) = range(&all_x);
         let (yl, yh) = range(&all_y);
-        let xs = format::axis_scale(cat_ax, xl, xh, false, (cat_ax.min, cat_ax.max));
-        let ys = format::axis_scale(val_ax, yl, yh, c.kind == ChartType::Bubble, (c.y_min, c.y_max));
+        let base = self.base;
+        let xs = format::axis_scale(
+            cat_ax,
+            xl,
+            xh,
+            false,
+            (cat_ax.min, cat_ax.max, cat_ax.major_unit),
+            max_intervals(area.width() - base * 4.5, base, true),
+            true,
+        );
+        let ys = format::axis_scale(
+            val_ax,
+            yl,
+            yh,
+            c.kind == ChartType::Bubble,
+            (c.y_min, c.y_max, c.y_major),
+            max_intervals(area.height() - base * 1.8, base, false),
+            true,
+        );
         let fr = self.frame(area, Across::Values(xs), ys, None, (false, false));
         let plot = fr.plot;
         let py = |v: f64| fr.val(&fr.primary, v);
@@ -1060,19 +1149,23 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
                     let volume = c.kind.has_volume() && i == 0;
                     (i, s, if volume { ChartType::Column } else { c.kind }, c.kind.has_volume() && !volume)
                 } else {
-                    (i, s, series_kind(c, s), s.secondary_axis)
+                    (i, s, drawn_kind(c, s), c.on_secondary(s))
                 }
             })
             .collect();
         let has_secondary = list.iter().any(|l| l.3) && list.iter().any(|l| !l.3);
         let on = |sec: bool| list.iter().filter(move |l| l.3 == sec && has_secondary || !has_secondary && !sec);
         let val_ax = &c.format.val_axis;
+        let base = self.base;
+        let horiz = c.kind.horizontal();
+        let axis_len = if horiz { area.width() - base * 4.5 } else { area.height() - base * 1.8 };
+        let intervals = max_intervals(axis_len, base, horiz);
         let scale_for = |sec: bool| -> (Scale, bool) {
             let series: Vec<&Listed> = on(sec).collect();
             let axis = if sec { AxisFormat::default() } else { val_ax.clone() };
-            let fixed = if sec { (None, None) } else { (c.y_min, c.y_max) };
+            let fixed = if sec { (c.y2_min, c.y2_max, c.y2_major) } else { (c.y_min, c.y_max, c.y_major) };
             if series.iter().any(|l| l.2.percent()) {
-                return (format::axis_scale(&axis, 0.0, 1.0, true, fixed), true);
+                return (format::axis_scale(&axis, 0.0, 1.0, true, fixed, intervals, false), true);
             }
             let prices = series.iter().any(|l| l.2.is_stock());
             let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -1098,7 +1191,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
             if !lo.is_finite() {
                 (lo, hi) = (0.0, 1.0);
             }
-            (format::axis_scale(&axis, lo, hi, !prices, fixed), false)
+            (format::axis_scale(&axis, lo, hi, !prices, fixed, intervals, true), false)
         };
         let (primary, pct1) = scale_for(false);
         let secondary = has_secondary.then(|| scale_for(true));
@@ -1292,7 +1385,7 @@ impl<'a, 'b, 'c> Painter<'a, 'b, 'c> {
                     }
                 }
                 if self.labels_on(s) {
-                    let t = format::label_text(c, raw, None, i, &s.name);
+                    let t = format::label_text(c, s, raw, None, i);
                     let pos = c.format.labels.position.unwrap_or(if k.stacked() { LabelPos::Center } else { LabelPos::OutsideEnd });
                     let lr = format::bar_label_rect(r, pos, horiz, negative, lab.width(&t) + lab.size * 0.4, lab.size * 1.3);
                     self.text(&t, lr, &lab, Align::Center, Anchor::Middle, 0.0);
@@ -1416,6 +1509,38 @@ mod tests {
 
     use super::*;
     use crate::{Image, RenderOpts, render_slide};
+
+    const AREA: Rect = Rect::new(0.0, 0.0, 400.0, 300.0);
+
+    #[test]
+    fn right_legend_is_a_centred_column_and_narrows_the_plot() {
+        let (o, plot) = legend_layout("r", (60.0, 100.0), AREA, 10.0, false);
+        assert_eq!((o.x, o.y), (340.0, 100.0));
+        assert_eq!((plot.x0, plot.x1, plot.y0, plot.y1), (0.0, 335.0, 0.0, 300.0));
+    }
+
+    #[test]
+    fn left_top_and_corner_positions() {
+        let (o, plot) = legend_layout("l", (60.0, 100.0), AREA, 10.0, false);
+        assert_eq!((o.x, o.y, plot.x0, plot.x1), (0.0, 100.0, 65.0, 400.0));
+        let (o, plot) = legend_layout("t", (100.0, 14.0), AREA, 10.0, false);
+        assert_eq!((o.x, o.y, plot.y0, plot.y1), (150.0, 0.0, 19.0, 300.0));
+        let (o, plot) = legend_layout("tr", (60.0, 100.0), AREA, 10.0, false);
+        assert_eq!((o.x, o.y, plot.x1), (340.0, 0.0, 335.0));
+    }
+
+    #[test]
+    fn bottom_legend_keeps_the_old_row_layout() {
+        let (o, plot) = legend_layout("b", (100.0, 14.0), AREA, 10.0, false);
+        assert_eq!((o.x, o.y, plot.y1, plot.x1), (150.0, 286.0, 281.0, 400.0));
+    }
+
+    #[test]
+    fn overlay_does_not_shrink_the_plot() {
+        let (o, plot) = legend_layout("r", (60.0, 100.0), AREA, 10.0, true);
+        assert_eq!(plot, AREA);
+        assert_eq!(o.x, 340.0);
+    }
 
     fn render(c: &Chart) -> Image {
         let mut p = Presentation::default();
@@ -1554,7 +1679,11 @@ mod tests {
                 // Hostile formatting: log axis over negative data, tiny units, huge markers and
                 // explosions, NaN angles.
                 c.format.val_axis.log_base = Some(10.0);
-                c.format.val_axis.major_unit = Some(1e-300);
+                c.y_major = Some(1e-300);
+                (c.y2_min, c.y2_max, c.y2_major) = (Some(f64::NAN), Some(-1e300), Some(-1.0));
+                c.y_format = Some("[\"0.E+;;;\\".into());
+                c.text_size = Some(f64::NAN);
+                c.title_size = Some(1e300);
                 c.format.cat_axis.min = Some(f64::NAN);
                 c.format.cat_axis.max = Some(-1e300);
                 c.format.cat_axis.reverse = true;
@@ -1578,6 +1707,40 @@ mod tests {
                 f(&mut c);
                 let _ = render(&c);
             }
+        }
+    }
+
+    /// The chart fields upstream's reader fills draw here too: the legend's overlay, the value
+    /// axes' number formats, units and deletion (a combo chart's secondary axis too), the text
+    /// sizes and the chart's language.
+    #[test]
+    fn upstream_chart_fields_change_the_picture() {
+        let base = preset("columnLineSecondary");
+        assert!(base.series.iter().any(|s| base.on_secondary(s)));
+        let changes: [(&str, fn(&mut Chart)); 9] = [
+            ("legend overlay", |c| {
+                c.legend = Some("r".into());
+                c.legend_overlay = true;
+            }),
+            ("value axis format", |c| c.y_format = Some("0 \"pts\"".into())),
+            ("value axis unit", |c| c.y_major = Some(2.0)),
+            ("value axis hidden", |c| c.y_hidden = true),
+            ("secondary axis hidden", |c| c.y2_hidden = true),
+            ("secondary axis bounds", |c| (c.y2_min, c.y2_max) = (Some(-50.0), Some(50.0))),
+            ("text size", |c| c.text_size = Some(16.0)),
+            ("title size", |c| c.title_size = Some(30.0)),
+            // The same format in German: only the decimal marks differ.
+            ("language", |c| c.lang = Some("de-DE".into())),
+        ];
+        let mut base = base;
+        base.legend = Some("r".into());
+        base.title = Some("Sales".into());
+        base.y_format = Some("#,##0.0".into());
+        let before = render(&base);
+        for (what, f) in changes {
+            let mut c = base.clone();
+            f(&mut c);
+            assert!(diff(&before, &render(&c)) > 0, "{what} changes nothing");
         }
     }
 

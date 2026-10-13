@@ -115,7 +115,9 @@ pub enum Crosses {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AxisFormat {
-    /// Hidden (`c:delete`): no line, ticks or labels. Gridlines stay.
+    /// Hidden (`c:delete`): no line, ticks or labels. Gridlines stay. The category (or X) axis'
+    /// switch: the value axes' are [`Chart::y_hidden`](crate::chart::Chart::y_hidden) and
+    /// [`Chart::y2_hidden`](crate::chart::Chart::y2_hidden).
     pub hidden: bool,
     /// Bounds of the X axis of scatter and bubble charts (the value axis' bounds are
     /// [`Chart::y_min`](crate::chart::Chart::y_min) and [`Chart::y_max`](crate::chart::Chart::y_max)).
@@ -128,12 +130,16 @@ pub struct AxisFormat {
     /// Logarithmic scale with this base (value axes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_base: Option<f64>,
-    /// Major and minor units (value axes); automatic when unset.
+    /// Major and minor units; automatic when unset. The major unit is the X axis' of scatter and
+    /// bubble charts: the value axes' are [`Chart::y_major`](crate::chart::Chart::y_major) and
+    /// [`Chart::y2_major`](crate::chart::Chart::y2_major).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub major_unit: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub minor_unit: Option<f64>,
-    /// Number format of the tick labels (`0.0`, `#,##0`, `0%`, `$#,##0.00`…).
+    /// Number format of the X axis' labels of scatter and bubble charts (`0.0`, `#,##0`, `0%`,
+    /// `$#,##0.00`…): the value axes' are [`Chart::y_format`](crate::chart::Chart::y_format) and
+    /// [`Chart::y2_format`](crate::chart::Chart::y2_format).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub num_fmt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,7 +248,8 @@ impl LabelPos {
 }
 
 /// What data labels show and how. The labels are on when
-/// [`Chart::data_labels`](crate::chart::Chart::data_labels) (or a series' own switch) is.
+/// [`Chart::data_labels`](crate::chart::Chart::data_labels) (or a series' own switch) is; their
+/// number format is each series' [`Series::number_format`](crate::chart::Series::number_format).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DataLabels {
@@ -253,8 +260,6 @@ pub struct DataLabels {
     pub legend_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<LabelPos>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub num_fmt: Option<String>,
     /// Between the parts of a label (`, ` when unset).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub separator: Option<String>,
@@ -275,7 +280,6 @@ impl Default for DataLabels {
             percent: false,
             legend_key: false,
             position: None,
-            num_fmt: None,
             separator: None,
             text: ChartText::default(),
             fill: None,
@@ -288,8 +292,9 @@ impl DataLabels {
     pub fn is_default(&self) -> bool {
         *self == DataLabels::default()
     }
-    /// The label of one point: the parts this shows, joined by the separator.
-    pub fn text_for(&self, value: f64, percent: Option<f64>, category: &str, series: &str) -> String {
+    /// The label of one point: the parts this shows, joined by the separator. `value` and
+    /// `percent` come formatted ([`Chart::data_label`](crate::chart::Chart::data_label)).
+    pub fn text_for(&self, value: &str, percent: Option<&str>, category: &str, series: &str) -> String {
         let mut parts: Vec<String> = vec![];
         if self.series && !series.is_empty() {
             parts.push(series.to_string());
@@ -298,13 +303,12 @@ impl DataLabels {
             parts.push(category.to_string());
         }
         if self.value {
-            parts.push(format_number(value, self.num_fmt.as_deref()));
+            parts.push(value.to_string());
         }
         if self.percent
             && let Some(p) = percent
         {
-            let fmt = self.num_fmt.as_deref().filter(|f| f.contains('%')).unwrap_or("0%");
-            parts.push(format_number(p, Some(fmt)));
+            parts.push(p.to_string());
         }
         parts.join(self.separator.as_deref().unwrap_or(", "))
     }
@@ -315,9 +319,12 @@ impl DataLabels {
 #[serde(default, rename_all = "camelCase")]
 pub struct ChartFormat {
     /// Font of all the chart's text; its colour falls back to
-    /// [`Chart::text_color`](crate::chart::Chart::text_color).
+    /// [`Chart::text_color`](crate::chart::Chart::text_color), its size is
+    /// [`Chart::text_size`](crate::chart::Chart::text_size) (`size` here is unused).
     #[serde(skip_serializing_if = "ChartText::is_empty")]
     pub text: ChartText,
+    /// The title's font; its size is [`Chart::title_size`](crate::chart::Chart::title_size)
+    /// (`size` here is unused).
     #[serde(skip_serializing_if = "ChartText::is_empty")]
     pub title_text: ChartText,
     /// The title sits over the plot rather than above it.
@@ -326,10 +333,10 @@ pub struct ChartFormat {
     pub title_fill: Option<Fill>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_line: Option<Line>,
+    /// The legend's font (whether it sits over the plot is
+    /// [`Chart::legend_overlay`](crate::chart::Chart::legend_overlay)).
     #[serde(skip_serializing_if = "ChartText::is_empty")]
     pub legend_text: ChartText,
-    /// The legend sits over the plot rather than beside it.
-    pub legend_overlay: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legend_fill: Option<Fill>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -466,209 +473,21 @@ pub const NUM_FORMATS: [(&str, &str); 9] = [
     ("Scientific", "0.00E+00"),
 ];
 
-/// Format a number with an Excel-style number format code: `General`, `0`, `0.00`, `#,##0.0`,
-/// `0%`, `0.0E+00`, literal prefixes and suffixes (`$`, `€`, `"units"`, `\x`), and a second
-/// section for negatives (`0;(0)`). Codes it doesn't know format as General.
-pub fn format_number(v: f64, fmt: Option<&str>) -> String {
-    if !v.is_finite() {
-        return String::new();
-    }
-    let fmt = fmt.map(str::trim).unwrap_or("");
-    if fmt.is_empty() || fmt.eq_ignore_ascii_case("general") {
-        return general(v);
-    }
-    let mut sections = fmt.split(';');
-    let first = sections.next().unwrap_or("");
-    let second = sections.next();
-    let (code, value, sign) = match second {
-        Some(neg) if v < 0.0 && !neg.is_empty() => (neg, -v, ""),
-        _ => (first, v.abs(), if v < 0.0 { "-" } else { "" }),
-    };
-    // Split the code into literal prefix, number part and literal suffix.
-    let mut prefix = String::new();
-    let mut suffix = String::new();
-    let mut number = String::new();
-    let mut chars = code.chars().peekable();
-    let mut seen_number = false;
-    while let Some(ch) = chars.next() {
-        let lit = match ch {
-            '"' => {
-                let mut s = String::new();
-                for c in chars.by_ref() {
-                    if c == '"' {
-                        break;
-                    }
-                    s.push(c);
-                }
-                Some(s)
-            }
-            '\\' => chars.next().map(String::from),
-            '_' | '*' => {
-                let _ = chars.next();
-                Some(if ch == '_' { " ".to_string() } else { String::new() })
-            }
-            '[' => {
-                // Colours and conditions (`[Red]`) are not drawn.
-                for c in chars.by_ref() {
-                    if c == ']' {
-                        break;
-                    }
-                }
-                Some(String::new())
-            }
-            '0' | '#' | '?' | '.' if suffix.is_empty() => {
-                seen_number = true;
-                number.push(ch);
-                None
-            }
-            ',' if seen_number && suffix.is_empty() => {
-                number.push(ch);
-                None
-            }
-            'E' | 'e' if seen_number && suffix.is_empty() && matches!(chars.peek(), Some('+' | '-')) => {
-                number.push('E');
-                let _ = chars.next();
-                None
-            }
-            '%' => {
-                if seen_number {
-                    suffix.push('%');
-                } else {
-                    prefix.push('%');
-                }
-                None
-            }
-            c => Some(c.to_string()),
-        };
-        if let Some(l) = lit {
-            if seen_number {
-                suffix.push_str(&l);
-            } else {
-                prefix.push_str(&l);
-            }
-        }
-    }
-    if number.is_empty() {
-        return format!("{prefix}{suffix}");
-    }
-    let percent = prefix.contains('%') || suffix.contains('%');
-    let value = if percent { value * 100.0 } else { value };
-    let body = if let Some(e) = number.find('E') {
-        let mant = number.get(..e).unwrap_or("");
-        let decimals = mant.split_once('.').map(|(_, d)| d.chars().filter(|c| matches!(c, '0' | '#' | '?')).count()).unwrap_or(0);
-        let s = format!("{:.*e}", decimals.min(15), value);
-        // Rust writes `1.5e3`; spreadsheets write `1.5E+03`.
-        match s.split_once('e') {
-            Some((m, x)) => {
-                let exp: i32 = x.parse().unwrap_or(0);
-                format!("{m}E{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs())
-            }
-            None => s,
-        }
-    } else {
-        // Trailing commas scale by thousands.
-        let mut num = number.as_str();
-        let mut value = value;
-        while let Some(n) = num.strip_suffix(',') {
-            num = n;
-            value /= 1000.0;
-        }
-        let (int_part, dec_part) = num.split_once('.').unwrap_or((num, ""));
-        let decimals = dec_part.chars().filter(|c| matches!(c, '0' | '#' | '?')).count().min(15);
-        let min_decimals = dec_part.chars().filter(|c| *c == '0').count().min(decimals);
-        let grouping = int_part.contains(',');
-        let min_int = int_part.chars().filter(|c| *c == '0').count();
-        // Halves round away from zero, as spreadsheets do.
-        let scale = 10f64.powi(decimals as i32);
-        let rounded = (value * scale).round() / scale;
-        let value = if rounded.is_finite() { rounded } else { value };
-        let s = format!("{:.*}", decimals, value);
-        let (i, d) = s.split_once('.').unwrap_or((s.as_str(), ""));
-        let mut d = d.to_string();
-        while d.len() > min_decimals && d.ends_with('0') {
-            d.pop();
-        }
-        let mut i = i.to_string();
-        if i == "0" && min_int == 0 && !d.is_empty() {
-            i.clear();
-        }
-        while i.len() < min_int {
-            i.insert(0, '0');
-        }
-        if grouping {
-            i = group_thousands(&i);
-        }
-        if d.is_empty() { i } else { format!("{i}.{d}") }
-    };
-    let neg = if body.chars().any(|c| c.is_ascii_digit() && c != '0') { sign } else { "" };
-    format!("{neg}{prefix}{body}{suffix}")
-}
-
-fn group_thousands(digits: &str) -> String {
-    let n = digits.len();
-    let mut out = String::with_capacity(n + n / 3);
-    for (k, ch) in digits.chars().enumerate() {
-        if k > 0 && (n - k).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// General format: integers as they are, up to 10 significant digits otherwise.
-fn general(v: f64) -> String {
-    if (v - v.round()).abs() < 1e-9 && v.abs() < 1e15 {
-        return format!("{}", v.round() as i64);
-    }
-    if v.abs() >= 1e15 || v.abs() < 1e-5 {
-        return format_number(v, Some("0.00E+00"));
-    }
-    let mag = v.abs().log10().floor() as i32;
-    let decimals = (9 - mag).clamp(0, 15) as usize;
-    let s = format!("{v:.decimals$}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    s.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn number_formats() {
-        assert_eq!(format_number(4.0, None), "4");
-        assert_eq!(format_number(4.25, Some("General")), "4.25");
-        assert_eq!(format_number(1234.5, Some("#,##0")), "1,235");
-        assert_eq!(format_number(1234.5, Some("#,##0.00")), "1,234.50");
-        assert_eq!(format_number(0.256, Some("0%")), "26%");
-        assert_eq!(format_number(0.256, Some("0.0%")), "25.6%");
-        assert_eq!(format_number(12.0, Some("$#,##0.00")), "$12.00");
-        assert_eq!(format_number(-12.0, Some("$#,##0")), "-$12");
-        assert_eq!(format_number(-12.0, Some("0;(0)")), "(12)");
-        assert_eq!(format_number(3.5, Some("0.0 \"pts\"")), "3.5 pts");
-        assert_eq!(format_number(1500.0, Some("0.00E+00")), "1.50E+03");
-        assert_eq!(format_number(2600000.0, Some("#,##0,,\"M\"")), "3M");
-        assert_eq!(format_number(1.0 / 3.0, None), "0.3333333333");
-        assert_eq!(format_number(f64::NAN, Some("0")), "");
-        // Hostile codes never panic.
-        for f in ["", ";", "\"", "\\", "[", "E+", "0.", ".", "%%", "#,##0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,", "0.000000000000000000000000000000"] {
-            let _ = format_number(1e300, Some(f));
-            let _ = format_number(-1e-300, Some(f));
-        }
-    }
-
-    #[test]
     fn label_text_parts() {
         let mut l = DataLabels::default();
-        assert_eq!(l.text_for(4.0, Some(0.25), "Q1", "S1"), "4");
+        assert_eq!(l.text_for("4", Some("25%"), "Q1", "S1"), "4");
         l.category = true;
         l.percent = true;
         l.separator = Some("; ".into());
-        assert_eq!(l.text_for(4.0, Some(0.25), "Q1", "S1"), "Q1; 4; 25%");
+        assert_eq!(l.text_for("4", Some("25%"), "Q1", "S1"), "Q1; 4; 25%");
         l.value = false;
         l.series = true;
-        assert_eq!(l.text_for(4.0, None, "Q1", "S1"), "S1; Q1");
+        assert_eq!(l.text_for("4", None, "Q1", "S1"), "S1; Q1");
     }
 
     #[test]

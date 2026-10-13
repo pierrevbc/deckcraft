@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Axis",
             ["Chart Format", "Current Selection"],
             None,
-            "{axis: category|value, visible?, min?: number|\"auto\", max?: number|\"auto\" (value axis), majorUnit?, minorUnit?: number|\"auto\", logBase?: number|null, reverse?, numFmt?: string|null, majorTick?/minorTick?: none|in|out|cross, labelPosition?: nextTo|low|high|none, crosses?: auto|min|max|number, rotation?: deg|null, majorGridlines?, minorGridlines?, title?: string|null, id?}",
+            "{axis: category|value|secondary, visible?, min?: number|\"auto\", max?: number|\"auto\" (value axes), majorUnit?, minorUnit?: number|\"auto\", logBase?: number|null, reverse?, numFmt?: string|null, majorTick?/minorTick?: none|in|out|cross, labelPosition?: nextTo|low|high|none, crosses?: auto|min|max|number, rotation?: deg|null, majorGridlines?, minorGridlines?, title?: string|null, id?} (the secondary value axis of a combo chart takes visible, min, max, majorUnit and numFmt)",
             has_selection,
             axis
         ),
@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Labels",
             ["Chart Design", "Chart Layouts", "Add Chart Element"],
             None,
-            "{show?: bool, series?: index (that series only), value?, category?, seriesName?, percent?, legendKey?: bool, position?: center|insideEnd|insideBase|outsideEnd|left|right|above|below|bestFit|null, numFmt?: string|null, separator?: string|null, id?}",
+            "{show?: bool, series?: index (that series only: show, numFmt), value?, category?, seriesName?, percent?, legendKey?: bool, position?: center|insideEnd|insideBase|outsideEnd|left|right|above|below|bestFit|null, numFmt?: string|null, separator?: string|null, id?}",
             has_selection,
             labels
         ),
@@ -216,12 +216,28 @@ pub(crate) fn apply_font(t: &mut ChartText, v: &Value, cmd: &str) -> Result<()> 
     Ok(())
 }
 
-fn axis_of<'a>(f: &'a mut ChartFormat, name: &str, cmd: &str) -> Result<&'a mut AxisFormat> {
+/// Which axis `chart.format.axis` formats.
+#[derive(Clone, Copy, PartialEq)]
+enum Which {
+    Category,
+    Value,
+    /// A combo chart's secondary value axis.
+    Secondary,
+}
+
+fn which_axis(name: &str, cmd: &str) -> Result<Which> {
     match name {
-        "category" | "cat" | "horizontal" | "x" => Ok(&mut f.cat_axis),
-        "value" | "val" | "vertical" | "y" => Ok(&mut f.val_axis),
-        _ => Err(bad(cmd, "`axis`: category or value")),
+        "category" | "cat" | "horizontal" | "x" => Ok(Which::Category),
+        "value" | "val" | "vertical" | "y" => Ok(Which::Value),
+        "secondary" | "secondaryValue" | "y2" => Ok(Which::Secondary),
+        _ => Err(bad(cmd, "`axis`: category, value or secondary")),
     }
+}
+
+/// A font param's `size`: `Some(None)` clears it.
+fn font_size(p: &Value) -> Option<Option<f64>> {
+    let v = p.get("font")?.get("size")?;
+    Some(v.as_f64().filter(|v| v.is_finite()).map(|v| v.clamp(1.0, 400.0)))
 }
 
 fn element(s: &mut Session, p: &Value) -> Result<Value> {
@@ -264,7 +280,7 @@ fn element(s: &mut Session, p: &Value) -> Result<Value> {
             "legend" => {
                 font(&mut f.legend_text)?;
                 if let Some(v) = bool_param(p, "overlay") {
-                    f.legend_overlay = v;
+                    c.legend_overlay = v;
                 }
                 (Some(&mut f.legend_fill), Some(&mut f.legend_line))
             }
@@ -312,6 +328,20 @@ fn element(s: &mut Session, p: &Value) -> Result<Value> {
             None if p.get("line").is_some() => return Err(bad(CMD, format!("`{el}` has no line"))),
             None => {}
         }
+        // The chart's and the title's text sizes are the chart's own (as read from the file).
+        let size = font_size(p);
+        let (slot, font) = match el.as_str() {
+            "chartArea" | "chart" => (&mut c.text_size, &mut c.format.text),
+            "title" | "chartTitle" => (&mut c.title_size, &mut c.format.title_text),
+            _ => return Ok(()),
+        };
+        if reset {
+            *slot = None;
+        }
+        if let Some(v) = size {
+            *slot = v;
+        }
+        font.size = None;
         Ok(())
     })
 }
@@ -342,7 +372,7 @@ fn legend(s: &mut Session, p: &Value) -> Result<Value> {
             c.legend.clone_from(pos);
         }
         if let Some(o) = overlay {
-            c.format.legend_overlay = o;
+            c.legend_overlay = o;
         }
         Ok(())
     })
@@ -384,13 +414,25 @@ fn axis(s: &mut Session, p: &Value) -> Result<Value> {
     let num_fmt =
         p.get("numFmt").map(|v| v.as_str().map(str::trim).filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("general")).map(String::from));
     let title = p.get("title").map(|v| v.as_str().map(String::from));
-    let value_axis = matches!(name.as_str(), "value" | "val" | "vertical" | "y");
+    let which = which_axis(&name, CMD)?;
+    let value_axis = which == Which::Value;
+    const SECONDARY: [&str; 5] = ["visible", "min", "max", "majorUnit", "numFmt"];
+    if which == Which::Secondary
+        && let Value::Object(o) = p
+        && let Some(k) = o.keys().find(|k| !SECONDARY.contains(&k.as_str()) && !matches!(k.as_str(), "axis" | "id"))
+    {
+        return Err(bad(CMD, format!("the secondary axis takes {}, not `{k}`", SECONDARY.join(", "))));
+    }
     with_chart(s, p, CMD, |c| {
         let xy = c.kind.is_xy();
-        if !value_axis && !xy && (min.is_some() || max.is_some()) {
+        if which == Which::Category && !xy && (min.is_some() || max.is_some()) {
             return Err(bad(CMD, "only value axes (and the X axis of scatter and bubble charts) have bounds"));
         }
-        let (lo, hi) = if value_axis { (&mut c.y_min, &mut c.y_max) } else { (&mut c.format.cat_axis.min, &mut c.format.cat_axis.max) };
+        let (lo, hi) = match which {
+            Which::Value => (&mut c.y_min, &mut c.y_max),
+            Which::Secondary => (&mut c.y2_min, &mut c.y2_max),
+            Which::Category => (&mut c.format.cat_axis.min, &mut c.format.cat_axis.max),
+        };
         if let Some(v) = min {
             *lo = v;
         }
@@ -412,15 +454,27 @@ fn axis(s: &mut Session, p: &Value) -> Result<Value> {
         if value_axis && let Some(v) = bool_param(p, "majorGridlines") {
             c.gridlines = v;
         }
-        let a = axis_of(&mut c.format, &name, CMD)?;
+        // The value axes' switch, unit and number format are the chart's (as read from the file).
+        let (hidden, unit, fmt) = match which {
+            Which::Value => (&mut c.y_hidden, &mut c.y_major, &mut c.y_format),
+            Which::Secondary => (&mut c.y2_hidden, &mut c.y2_major, &mut c.y2_format),
+            Which::Category => (&mut c.format.cat_axis.hidden, &mut c.format.cat_axis.major_unit, &mut c.format.cat_axis.num_fmt),
+        };
         if let Some(v) = bool_param(p, "visible") {
-            a.hidden = !v;
-        }
-        if let Some(v) = bool_param(p, "reverse") {
-            a.reverse = v;
+            *hidden = !v;
         }
         if let Some(v) = major {
-            a.major_unit = v.filter(|u| *u > 0.0);
+            *unit = v.filter(|u| *u > 0.0);
+        }
+        if let Some(v) = &num_fmt {
+            fmt.clone_from(v);
+        }
+        if which == Which::Secondary {
+            return Ok(());
+        }
+        let a = if value_axis { &mut c.format.val_axis } else { &mut c.format.cat_axis };
+        if let Some(v) = bool_param(p, "reverse") {
+            a.reverse = v;
         }
         if let Some(v) = minor {
             a.minor_unit = v.filter(|u| *u > 0.0);
@@ -442,9 +496,6 @@ fn axis(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(v) = crosses {
             a.crosses = v;
-        }
-        if let Some(v) = &num_fmt {
-            a.num_fmt.clone_from(v);
         }
         if !value_axis && let Some(v) = bool_param(p, "majorGridlines") {
             a.major_gridlines = v;
@@ -483,6 +534,14 @@ fn labels(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
+        // The labels' number format is their series'.
+        if let Some(v) = &num_fmt {
+            for (i, s) in c.series.iter_mut().enumerate() {
+                if only.is_none_or(|k| k == i) {
+                    s.number_format.clone_from(v);
+                }
+            }
+        }
         let l = &mut c.format.labels;
         for (key, slot) in [
             ("value", &mut l.value),
@@ -497,9 +556,6 @@ fn labels(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(v) = position {
             l.position = v;
-        }
-        if let Some(v) = &num_fmt {
-            l.num_fmt.clone_from(v);
         }
         if let Some(v) = &separator {
             l.separator.clone_from(v);
@@ -718,9 +774,10 @@ pub fn reset_format(c: &mut Chart) {
         ..a.clone()
     };
     let (cat, val) = (keep_axis(&c.format.cat_axis), keep_axis(&c.format.val_axis));
-    let overlays = (c.format.title_overlay, c.format.legend_overlay);
+    let overlay = c.format.title_overlay;
     c.format = ChartFormat { cat_axis: cat, val_axis: val, labels, first_slice_angle: keep_angle, ..Default::default() };
-    (c.format.title_overlay, c.format.legend_overlay) = overlays;
+    c.format.title_overlay = overlay;
+    (c.text_size, c.title_size) = (None, None);
     c.chart_fill = None;
     c.plot_fill = None;
     c.text_color = None;
@@ -756,7 +813,7 @@ pub fn apply_style(c: &mut Chart, style: usize) {
         2 => {
             c.data_labels = true;
             c.gridlines = false;
-            c.format.val_axis.hidden = !pie;
+            c.y_hidden = !pie;
             c.format.labels.position = Some(if pie {
                 LabelPos::OutsideEnd
             } else if line_like {
@@ -799,7 +856,8 @@ pub fn apply_style(c: &mut Chart, style: usize) {
         }
         // Bold title, legend on top, minor gridlines.
         6 => {
-            c.format.title_text = ChartText { size: Some(18.0), bold: Some(true), ..Default::default() };
+            c.format.title_text = ChartText { bold: Some(true), ..Default::default() };
+            c.title_size = Some(18.0);
             if c.legend.is_some() {
                 c.legend = Some("t".into());
             }
@@ -870,7 +928,7 @@ pub fn apply_layout(c: &mut Chart, layout: usize) {
     }
     c.gridlines = grid;
     c.format.val_axis.minor_gridlines = minor;
-    c.format.val_axis.hidden = val_hidden;
+    c.y_hidden = val_hidden;
     if layout == 8 || (labels && pie) {
         c.format.labels.category = pie;
         c.format.labels.percent = pie && layout == 8;
@@ -945,9 +1003,11 @@ mod tests {
         assert!(matches!(c.chart_fill, Some(Fill::Solid { .. })));
         let l = c.format.chart_line.as_ref().unwrap();
         assert_eq!((l.width, l.dash.clone()), (Some(2.0), Some(Dash::Preset { name: "dash".into() })));
-        assert_eq!(c.format.text.size, Some(12.0));
+        // The chart's and the title's sizes are the chart's own fields.
+        assert_eq!((c.text_size, c.format.text.size), (Some(12.0), None));
         assert!(matches!(c.plot_fill, Some(Fill::Gradient(_))));
-        assert_eq!((c.format.title_text.size, c.format.title_text.bold, c.format.title_overlay), (Some(20.0), Some(true), true));
+        assert_eq!((c.title_size, c.format.title_text.bold, c.format.title_overlay), (Some(20.0), Some(true), true));
+        assert_eq!(c.format.title_text.size, None);
         assert_eq!(c.format.title_text.font.as_deref(), Some("Liberation Serif"));
         assert_eq!(c.format.legend_fill, Some(Fill::None));
         assert_eq!(c.format.val_axis.major_grid_line.as_ref().and_then(|l| l.width), Some(0.5));
@@ -955,7 +1015,7 @@ mod tests {
         // Reset one element, errors for what it doesn't have.
         s.execute("chart.format.element", &json!({"element": "chartArea", "reset": true})).unwrap();
         let c = chart(&s, id);
-        assert!(c.chart_fill.is_none() && c.format.chart_line.is_none() && c.format.text.is_empty());
+        assert!(c.chart_fill.is_none() && c.format.chart_line.is_none() && c.format.text.is_empty() && c.text_size.is_none());
         assert!(s.execute("chart.format.element", &json!({"element": "valueAxis", "fill": "#ff0000"})).is_err());
         assert!(s.execute("chart.format.element", &json!({"element": "nope"})).is_err());
         assert!(s.execute("chart.format.element", &json!({"element": "title", "fill": 7})).is_err());
@@ -978,7 +1038,9 @@ mod tests {
         let c = chart(&s, id);
         assert_eq!((c.y_min, c.y_max), (Some(0.0), Some(10.0)));
         let v = &c.format.val_axis;
-        assert_eq!((v.major_unit, v.minor_unit, v.num_fmt.as_deref(), v.reverse), (Some(2.0), Some(0.5), Some("0.0"), true));
+        // The value axis' unit, number format and switch are the chart's own fields.
+        assert_eq!((c.y_major, c.y_format.as_deref(), c.y_hidden), (Some(2.0), Some("0.0"), false));
+        assert_eq!((v.major_unit, v.minor_unit, v.num_fmt.as_deref(), v.reverse), (None, Some(0.5), None, true));
         assert_eq!((v.major_tick, v.minor_tick, v.label_pos), (Some(TickMark::Outside), Some(TickMark::Inside), Some(TickLabelPos::Low)));
         assert_eq!(v.crosses, Some(Crosses::At { value: 5.0 }));
         assert!(v.minor_gridlines);
@@ -986,8 +1048,17 @@ mod tests {
         assert_eq!((c.format.cat_axis.rotation, c.format.cat_axis.hidden, c.format.cat_axis.major_gridlines), (Some(-45.0), true, true));
         s.execute("chart.format.axis", &json!({"axis": "value", "min": "auto", "max": null, "logBase": 10, "numFmt": "General"})).unwrap();
         let c = chart(&s, id);
-        assert_eq!((c.y_min, c.y_max, c.format.val_axis.log_base, c.format.val_axis.num_fmt.clone()), (None, None, Some(10.0), None));
+        assert_eq!((c.y_min, c.y_max, c.format.val_axis.log_base, c.y_format.clone()), (None, None, Some(10.0), None));
         assert!(s.execute("chart.format.axis", &json!({"axis": "category", "min": 1})).is_err());
+        s.execute("chart.format.axis", &json!({"axis": "value", "visible": false})).unwrap();
+        assert!(chart(&s, id).y_hidden);
+        // A combo chart's secondary axis: bounds, unit, number format, switch.
+        let (mut cs, cid) = session_with_chart("columnLineSecondary");
+        cs.execute("chart.format.axis", &json!({"axis": "secondary", "min": 0, "max": 80, "majorUnit": 20, "numFmt": "0\"%\"", "visible": true}))
+            .unwrap();
+        let c = chart(&cs, cid);
+        assert_eq!((c.y2_min, c.y2_max, c.y2_major, c.y2_format.as_deref(), c.y2_hidden), (Some(0.0), Some(80.0), Some(20.0), Some("0\"%\""), false));
+        assert!(cs.execute("chart.format.axis", &json!({"axis": "secondary", "reverse": true})).is_err());
         // Scatter charts have X axis bounds.
         let (mut sc, sid) = session_with_chart("scatter");
         sc.execute("chart.format.axis", &json!({"axis": "category", "min": 0.5, "max": 5, "majorUnit": 0.5})).unwrap();
@@ -1014,10 +1085,10 @@ mod tests {
         assert!(c.data_labels);
         let l = &c.format.labels;
         assert_eq!(
-            (l.value, l.category, l.percent, l.position, l.num_fmt.as_deref(), l.separator.as_deref()),
+            (l.value, l.category, l.percent, l.position, c.series[0].number_format.as_deref(), l.separator.as_deref()),
             (false, true, true, Some(LabelPos::OutsideEnd), Some("0.0%"), Some(" / "))
         );
-        assert_eq!((c.legend.as_deref(), c.format.legend_overlay), (Some("l"), true));
+        assert_eq!((c.legend.as_deref(), c.legend_overlay), (Some("l"), true));
         assert_eq!(c.series[0].point_fills.len(), 1);
         assert_eq!(c.series[0].format.point_explosion, vec![(2, 20)]);
         // The series' explosion is the exploded type's.

@@ -97,7 +97,6 @@ pub(super) fn labels_of(d: &El) -> (bool, DataLabels) {
         percent: flag(d.child("showPercent")).unwrap_or(false),
         legend_key: flag(d.child("showLegendKey")).unwrap_or(false),
         position: d.child_val("dLblPos").and_then(LabelPos::from_xml),
-        num_fmt: d.child("numFmt").and_then(num_fmt),
         separator: d.child("separator").map(|s| s.text()),
         text: text_of(Some(d)),
         fill: fill_of(d.child("spPr")),
@@ -113,7 +112,8 @@ pub(super) fn labels_of(d: &El) -> (bool, DataLabels) {
     (shown, l)
 }
 
-/// A custom number format: kept unless it follows the source data or is General.
+/// A custom number format of the X axis of a scatter or bubble chart: kept unless it follows the
+/// source data or is General (the value axes' are read by the chart reader).
 fn num_fmt(e: &El) -> Option<String> {
     let code = e.attr("formatCode")?.trim();
     if e.bool("sourceLinked") == Some(true) || code.is_empty() || code.eq_ignore_ascii_case("general") {
@@ -122,8 +122,9 @@ fn num_fmt(e: &El) -> Option<String> {
     Some(code.to_string())
 }
 
-/// An axis element (`c:catAx`, `c:valAx`, `c:dateAx`) → its format. The value axis' bounds and
-/// major gridlines switch are read by the chart reader itself.
+/// An axis element (`c:catAx`, `c:valAx`, `c:dateAx`) → its format. The value axis' bounds,
+/// major unit, number format, deletion and major gridlines switch are read by the chart reader
+/// itself.
 pub(super) fn axis_of(a: &El) -> AxisFormat {
     let sc = a.child("scaling");
     let grid = |name: &str| a.child(name);
@@ -158,30 +159,33 @@ pub(super) fn axis_of(a: &El) -> AxisFormat {
     }
 }
 
-/// Chart-wide formatting: fonts, boxes, axes, data labels, first slice angle.
+/// Chart-wide formatting: fonts, boxes, axes, data labels, first slice angle. What the chart
+/// reader reads itself stays out: the legend's overlay, the value axis' bounds, unit, number
+/// format and deletion, and the chart's and title's text sizes.
 pub(super) fn read_format(root: &El, ch: &El, pa: &El, c: &mut Chart, val_ax: Option<&El>, cat_ax: Option<&El>) {
     let f = &mut c.format;
     f.text = text_of(Some(root));
+    f.text.size = None;
     f.rounded_corners = flag(root.child("roundedCorners")).unwrap_or(false);
     f.chart_line = line_of(root.child("spPr"));
     f.plot_line = line_of(pa.child("spPr"));
     if let Some(t) = ch.child("title") {
-        f.title_text = text_of(Some(t));
+        f.title_text = ChartText { size: None, ..text_of(Some(t)) };
         f.title_overlay = flag(t.child("overlay")).unwrap_or(false);
         f.title_fill = fill_of(t.child("spPr"));
         f.title_line = line_of(t.child("spPr"));
     }
     if let Some(l) = ch.child("legend") {
         f.legend_text = text_of(Some(l));
-        f.legend_overlay = flag(l.child("overlay")).unwrap_or(false);
         f.legend_fill = fill_of(l.child("spPr"));
         f.legend_line = line_of(l.child("spPr"));
     }
     if let Some(a) = val_ax {
         f.val_axis = axis_of(a);
-        // The value axis' major gridlines and bounds are `Chart::gridlines`, `y_min`, `y_max`.
+        // The value axis' major gridlines, bounds, unit, number format and deletion are
+        // `Chart::gridlines`, `y_min`, `y_max`, `y_major`, `y_format` and `y_hidden`.
         f.val_axis.major_gridlines = false;
-        (f.val_axis.min, f.val_axis.max) = (None, None);
+        (f.val_axis.min, f.val_axis.max, f.val_axis.major_unit, f.val_axis.num_fmt, f.val_axis.hidden) = (None, None, None, None, false);
     }
     if let Some(a) = cat_ax {
         f.cat_axis = axis_of(a);
@@ -196,6 +200,20 @@ pub(super) fn read_format(root: &El, ch: &El, pa: &El, c: &mut Chart, val_ax: Op
         }
         if let Some(a) = num(g.child("firstSliceAng")) {
             f.first_slice_angle = a.rem_euclid(360.0);
+        }
+    }
+    // The elements have sizes of their own here: the chart's text size is its own `c:txPr`'s when
+    // it sets one (the chart reader takes the axes' or legend's, the one size it draws them at,
+    // when it doesn't). Sizes that size gives anyway are not the elements' own.
+    if let Some(size) = super::text_size(root.child("txPr")) {
+        c.text_size = Some(size);
+    }
+    if let Some(size) = c.text_size {
+        let f = &mut c.format;
+        for t in [&mut f.legend_text, &mut f.cat_axis.text, &mut f.val_axis.text] {
+            if t.size.is_some_and(|s| (s - size).abs() < 0.005) {
+                t.size = None;
+            }
         }
     }
     if !c.data_labels

@@ -23,6 +23,9 @@ enum Tok {
     Dot,
     Comma,
     Percent,
+    /// `E+` or `E-`: scientific notation, the exponent's digits after it (`-` shows only a
+    /// negative exponent's sign).
+    Exp(char),
 }
 
 /// A section's tokens (`[$₽-419]` gives its symbol; colours, conditions and locales drop out).
@@ -74,6 +77,10 @@ fn tokens(section: &str) -> Vec<Tok> {
             '.' => out.push(Tok::Dot),
             ',' => out.push(Tok::Comma),
             '%' => out.push(Tok::Percent),
+            'E' | 'e' if matches!(it.peek(), Some('+' | '-')) => {
+                let sign = it.next().unwrap_or('+');
+                out.push(Tok::Exp(sign));
+            }
             '@' => {}
             _ => out.push(Tok::Lit(c.to_string())),
         }
@@ -163,6 +170,9 @@ pub fn format(code: &str, v: f64, lang: Option<&str>) -> String {
         return s.trim().to_string();
     };
     let percent = toks.contains(&Tok::Percent);
+    if let Some(e) = toks.iter().position(|t| matches!(t, Tok::Exp(_))).filter(|e| (first..last).contains(e)) {
+        return scientific(&toks, (first, e, last), v * if percent { 100.0 } else { 1.0 }, minus, dec);
+    }
     let number = toks.get(first..=last).unwrap_or(&[]);
     let dot = number.iter().position(|t| *t == Tok::Dot);
     let (int_part, frac_part) = match dot {
@@ -182,7 +192,7 @@ pub fn format(code: &str, v: f64, lang: Option<&str>) -> String {
     if !x.is_finite() {
         x = 0.0;
     }
-    let s = format!("{x:.max_frac$}");
+    let s = format!("{:.max_frac$}", round_half_away(x, max_frac));
     let (ip, fp) = s.split_once('.').unwrap_or((s.as_str(), ""));
     let mut fp = fp.to_string();
     while fp.len() > min_frac && fp.ends_with('0') {
@@ -207,6 +217,53 @@ pub fn format(code: &str, v: f64, lang: Option<&str>) -> String {
     let before = lits(toks.get(..first).unwrap_or(&[]));
     let after = lits(toks.get(last + 1..).unwrap_or(&[]));
     let out = format!("{before}{num}{after}");
+    let out = out.trim();
+    if minus && !out.is_empty() { format!("-{out}") } else { out.to_string() }
+}
+
+/// `x` rounded to `digits` decimals, halves away from zero as spreadsheets do (`format!` rounds
+/// them to even).
+fn round_half_away(x: f64, digits: usize) -> f64 {
+    let scale = 10f64.powi(digits.min(15) as i32);
+    let r = (x * scale).round() / scale;
+    if r.is_finite() { r } else { x }
+}
+
+/// Literal text of `toks` (and `%` signs).
+fn literals(toks: &[Tok]) -> String {
+    toks.iter()
+        .filter_map(|t| match t {
+            Tok::Lit(s) => Some(s.clone()),
+            Tok::Percent => Some("%".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Scientific notation (`0.00E+00`): `v` (unsigned, `minus` for its sign) as a mantissa with the
+/// decimals the code before the `E` asks for, and an exponent at least as wide as its digits.
+/// `at`: the positions of the first digit, the `E` and the last digit.
+fn scientific(toks: &[Tok], at: (usize, usize, usize), v: f64, minus: bool, dec: char) -> String {
+    let (first, e, last) = at;
+    let mant = toks.get(first..e).unwrap_or(&[]);
+    let decimals = match mant.iter().position(|t| *t == Tok::Dot) {
+        Some(d) => mant.get(d + 1..).unwrap_or(&[]).iter().filter(|t| matches!(t, Tok::Digit(_))).count().min(15),
+        None => 0,
+    };
+    let exp_digits = toks.get(e + 1..=last).unwrap_or(&[]).iter().filter(|t| matches!(t, Tok::Digit(_))).count().clamp(1, 3);
+    let sign = if let Some(Tok::Exp(s)) = toks.get(e) { *s } else { '+' };
+    let s = format!("{v:.decimals$e}");
+    let (m, x) = s.split_once('e').unwrap_or((s.as_str(), "0"));
+    let x: i32 = x.parse().unwrap_or(0);
+    let x_sign = if x < 0 {
+        "-"
+    } else if sign == '+' {
+        "+"
+    } else {
+        ""
+    };
+    let num = format!("{}E{x_sign}{:0exp_digits$}", m.replace('.', &dec.to_string()), x.abs());
+    let out = format!("{}{num}{}", literals(toks.get(..first).unwrap_or(&[])), literals(toks.get(last + 1..).unwrap_or(&[])));
     let out = out.trim();
     if minus && !out.is_empty() { format!("-{out}") } else { out.to_string() }
 }
@@ -243,6 +300,20 @@ mod tests {
         assert_eq!(format("0;0", -3.0, None), "3");
         assert_eq!(format("0", -3.0, None), "-3");
         assert_eq!(format("\"x\"0", 5.0, None), "x5");
+    }
+
+    #[test]
+    fn scientific_and_spreadsheet_rounding() {
+        assert_eq!(format("0.00E+00", 1500.0, None), "1.50E+03");
+        assert_eq!(format("0.0E+00", 0.00042, Some("de-DE")), "4,2E-04");
+        assert_eq!(format("0E+0", -2.0e7, None), "-2E+7");
+        assert_eq!(format("#,##0", 1234.5, None), "1,235");
+        assert_eq!(format("0", 2.5, None), "3");
+        assert_eq!(format("$#,##0", -12.0, None), "-$12");
+        assert_eq!(format("0;(0)", -12.0, None), "(12)");
+        assert_eq!(format("0.0 \"pts\"", 3.5, None), "3.5 pts");
+        assert_eq!(format("#,##0,,\"M\"", 2_600_000.0, None), "3M");
+        assert_eq!(format("General", 1.0 / 3.0, None), "0.3333333333");
     }
 
     #[test]

@@ -238,15 +238,6 @@ fn three_d(ch: &El, g: &El, kind: ChartType) -> ThreeD {
     t
 }
 
-/// The id of the value axis plot group `g` uses: the vertical one for a scatter chart.
-fn value_axis(pa: &El, g: &El) -> Option<u32> {
-    let ids: Vec<u32> = g.children_named("axId").filter_map(|a| a.u32("val")).collect();
-    let axes: Vec<&El> =
-        pa.children_named("valAx").filter(|a| a.child("axId").and_then(|i| i.u32("val")).is_some_and(|i| ids.contains(&i))).collect();
-    let pick = if axes.len() > 1 { axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l" | "r"))).or(axes.first()) } else { axes.first() };
-    pick.and_then(|a| a.child("axId")).and_then(|i| i.u32("val"))
-}
-
 /// Our extension says the lines are stepped.
 fn stepped(root: &El) -> bool {
     root.child("extLst")
@@ -293,8 +284,8 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
         .or(used.first())
         .cloned();
     let mut sources: Vec<SeriesSource> = vec![];
-    // Per plot group: its element name, its series (a range of `c.series`) and its value axis.
-    let mut groups: Vec<(&str, std::ops::Range<usize>, Option<u32>)> = vec![];
+    // Per plot group: its element name and its series (a range of `c.series`).
+    let mut groups: Vec<(&str, std::ops::Range<usize>)> = vec![];
     for g in pa.elements() {
         let name = g.local();
         if !name.ends_with("Chart") {
@@ -406,7 +397,7 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
             });
             c.series.push(ser);
         }
-        groups.push((name, first_series..c.series.len(), value_axis(pa, g)));
+        groups.push((name, first_series..c.series.len()));
     }
     let first = *kinds.first()?;
     c.kind = if kinds.iter().any(|k| *k != first) { ChartType::Combo } else { first };
@@ -426,16 +417,6 @@ pub(crate) fn chart_from(root: &El) -> Option<Chart> {
             let moved_src: Vec<SeriesSource> = sources.drain(v).collect();
             c.series.splice(0..0, moved);
             sources.splice(0..0, moved_src);
-        }
-    } else {
-        // Series whose group plots on another value axis than the first group: secondary axis.
-        let primary = groups.iter().find_map(|g| g.2);
-        for (_, range, axis) in &groups {
-            if axis.is_some() && *axis != primary {
-                for s in c.series.get_mut(range.clone()).into_iter().flatten() {
-                    s.secondary_axis = true;
-                }
-            }
         }
     }
     if c.kind != ChartType::Combo {

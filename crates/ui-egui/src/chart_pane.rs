@@ -336,7 +336,7 @@ pub fn pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId) {
             if ui.checkbox(&mut rc, "Rounded corners").changed() {
                 run(app, "chart.format.element", e(json!({"element": "chartArea", "roundedCorners": rc})));
             }
-            let mut text = f.text.clone();
+            let mut text = ChartText { size: c.text_size, ..f.text.clone() };
             if text.color.is_none() {
                 text.color.clone_from(&c.text_color);
             }
@@ -360,7 +360,7 @@ pub fn pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId) {
                     run(app, "chart.format.element", e(json!({"element": "title", "overlay": ov})));
                 }
                 let send = |v: Value| ("chart.format.element", e(json!({"element": "title", "font": v})));
-                font_options(app, ui, &f.title_text, "ti", &send);
+                font_options(app, ui, &ChartText { size: c.title_size, ..f.title_text.clone() }, "ti", &send);
                 let send = |v: Value| ("chart.format.element", e(json!({"element": "title", "fill": v})));
                 fill_options(app, ui, f.title_fill.as_ref(), &send);
                 let send = |v: Value| ("chart.format.element", e(json!({"element": "title", "line": v})));
@@ -383,7 +383,7 @@ pub fn pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId) {
                 }
             }
             if c.legend.is_some() {
-                let mut ov = f.legend_overlay;
+                let mut ov = c.legend_overlay;
                 if ui.checkbox(&mut ov, "Show the legend without overlapping the chart").changed() {
                     run(app, "chart.format.legend", e(json!({"overlay": !ov})));
                 }
@@ -500,20 +500,24 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
         v
     };
     heading(ui, "Axis Options");
-    let mut visible = !a.hidden;
+    // The value axis' switch, major unit and number format are the chart's own fields.
+    let (hidden, major_unit, num_fmt) =
+        if value { (c.y_hidden, c.y_major, c.y_format.as_deref()) } else { (a.hidden, a.major_unit, a.num_fmt.as_deref()) };
+    let mut visible = !hidden;
     if ui.checkbox(&mut visible, "Show axis").changed() {
         run(app, "chart.format.axis", e(json!({"visible": visible})));
     }
     let xy = c.kind.is_xy();
     if value || xy {
-        let (lo, hi) = if value {
-            c.value_range()
+        // What the automatic scale would be (PowerPoint's: 5% headroom, a 1-2-5 unit).
+        let (nmin, nmax, nstep) = if value {
+            c.axis_scale(false, 8).unwrap_or((0.0, 1.0, 0.2))
         } else {
             let xs = c.series.iter().flat_map(|s| s.x_values.iter().flatten().copied());
             let (l, h) = xs.fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(v), h.max(v)));
-            if l <= h { (l, h) } else { (0.0, 1.0) }
+            let (lo, hi) = if l <= h { (l, h) } else { (0.0, 1.0) };
+            deckcraft_model::chart::axis_scale(lo, hi, None, None, None, 8, true)
         };
-        let (nmin, nmax, nstep) = deckcraft_model::chart::nice_scale(lo.min(0.0), hi);
         let bounds = if value { (c.y_min, c.y_max) } else { (a.min, a.max) };
         for (label, key, cur, auto) in [("Minimum", "min", bounds.0, nmin), ("Maximum", "max", bounds.1, nmax)] {
             ui.horizontal(|ui| {
@@ -530,7 +534,7 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
                 }
             });
         }
-        for (label, key, cur, auto) in [("Major unit", "majorUnit", a.major_unit, nstep), ("Minor unit", "minorUnit", a.minor_unit, nstep / 5.0)] {
+        for (label, key, cur, auto) in [("Major unit", "majorUnit", major_unit, nstep), ("Minor unit", "minorUnit", a.minor_unit, nstep / 5.0)] {
             ui.horizontal(|ui| {
                 ui.add_sized(vec2(70.0, 20.0), egui::Label::new(label));
                 if let Some(nv) = widgets::spinner(ui, &format!("ax-{key}"), cur.unwrap_or(auto), (auto / 2.0).max(0.01), "", 70.0) {
@@ -629,7 +633,7 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
     });
     if value || c.kind.is_xy() {
         let send = |v: Value| ("chart.format.axis", e(v));
-        num_format(app, ui, a.num_fmt.as_deref(), &format!("ax-{axis}"), &send);
+        num_format(app, ui, num_fmt, &format!("ax-{axis}"), &send);
     }
     heading(ui, "Gridlines");
     ui.horizontal(|ui| {
@@ -647,6 +651,45 @@ fn axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, value: boo
     line_options(app, ui, "Line", a.line.as_ref(), el, &send);
     let send = |v: Value| ("chart.format.element", with_id(id, json!({"element": el, "font": v})));
     font_options(app, ui, &a.text, el, &send);
+    if value && c.series.iter().any(|s| c.on_secondary(s)) {
+        secondary_axis_pane(app, ui, c, id);
+    }
+}
+
+/// A combo chart's secondary value axis: shown or not, bounds, major unit, number format.
+fn secondary_axis_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId) {
+    let e = |v: Value| -> Value {
+        let mut v = with_id(id, v);
+        if let Some(o) = v.as_object_mut() {
+            o.insert("axis".into(), json!("secondary"));
+        }
+        v
+    };
+    heading(ui, "Secondary Vertical Axis");
+    let mut visible = !c.y2_hidden;
+    if ui.checkbox(&mut visible, "Show secondary axis").changed() {
+        run(app, "chart.format.axis", e(json!({"visible": visible})));
+    }
+    let (nmin, nmax, nstep) = c.axis_scale(true, 8).unwrap_or((0.0, 1.0, 0.2));
+    for (label, key, cur, auto) in
+        [("Minimum", "min", c.y2_min, nmin), ("Maximum", "max", c.y2_max, nmax), ("Major unit", "majorUnit", c.y2_major, nstep)]
+    {
+        ui.horizontal(|ui| {
+            ui.add_sized(vec2(70.0, 20.0), egui::Label::new(label));
+            if let Some(nv) = widgets::spinner(ui, &format!("ax2-{key}"), cur.unwrap_or(auto), nstep.max(0.01), "", 70.0) {
+                run(app, "chart.format.axis", e(json!({key: nv})));
+            }
+            if cur.is_some() {
+                if ui.small_button("Reset").on_hover_text("Automatic").clicked() {
+                    run(app, "chart.format.axis", e(json!({key: "auto"})));
+                }
+            } else {
+                ui.weak("Auto");
+            }
+        });
+    }
+    let send = |v: Value| ("chart.format.axis", e(v));
+    num_format(app, ui, c.y2_format.as_deref(), "ax-secondary", &send);
 }
 
 /// Label positions offered for the chart's type (as PowerPoint offers them).
@@ -724,8 +767,16 @@ fn labels_pane(app: &mut SlideApp, ui: &mut Ui, c: &Chart, id: ShapeId, series: 
             }
         }
     }
-    let send = |v: Value| ("chart.format.labels", with_id(id, v));
-    num_format(app, ui, l.num_fmt.as_deref(), "dl", &send);
+    // The labels' number format is their series' (all of them unless one is formatted).
+    let send = |v: Value| {
+        let mut v = with_id(id, v);
+        if let (Some(i), Some(o)) = (series, v.as_object_mut()) {
+            o.insert("series".into(), json!(i));
+        }
+        ("chart.format.labels", v)
+    };
+    let cur = c.series.get(series.unwrap_or(0)).and_then(|s| s.number_format.as_deref()).filter(|f| !f.eq_ignore_ascii_case("general"));
+    num_format(app, ui, cur, "dl", &send);
     let send = |v: Value| ("chart.format.element", with_id(id, json!({"element": "dataLabels", "font": v})));
     font_options(app, ui, &l.text, "dl", &send);
     let send = |v: Value| ("chart.format.element", with_id(id, json!({"element": "dataLabels", "fill": v})));
@@ -871,8 +922,9 @@ pub fn design_groups(app: &mut SlideApp, ui: &mut Ui) {
             let axes = !pie(&c);
             if axes {
                 ui.menu_button("Axes", |ui| {
-                    for (l, axis, a) in [("Primary Horizontal", "category", &c.format.cat_axis), ("Primary Vertical", "value", &c.format.val_axis)] {
-                        let mut on = !a.hidden;
+                    for (l, axis, hidden) in [("Primary Horizontal", "category", c.format.cat_axis.hidden), ("Primary Vertical", "value", c.y_hidden)]
+                    {
+                        let mut on = !hidden;
                         if ui.checkbox(&mut on, l).changed() {
                             run(app, "chart.format.axis", e(json!({"axis": axis, "visible": on})));
                         }
@@ -1174,8 +1226,8 @@ pub fn format_tab(app: &mut SlideApp, ui: &mut Ui) {
 fn element_text(c: &Chart, el: &str) -> Option<ChartText> {
     let f = &c.format;
     Some(match el {
-        "chartArea" => f.text.clone(),
-        "title" => f.title_text.clone(),
+        "chartArea" => ChartText { size: c.text_size, ..f.text.clone() },
+        "title" => ChartText { size: c.title_size, ..f.title_text.clone() },
         "legend" => f.legend_text.clone(),
         "dataLabels" => f.labels.text.clone(),
         "categoryAxis" => f.cat_axis.text.clone(),

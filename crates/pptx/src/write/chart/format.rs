@@ -158,7 +158,7 @@ pub(super) fn legend(w: &mut W, c: &Chart) {
     let f = &c.format;
     w.open0("c:legend");
     w.val("c:legendPos", p);
-    w.val("c:overlay", if f.legend_overlay { 1 } else { 0 });
+    w.val("c:overlay", u8::from(c.legend_overlay));
     sp_pr(w, f.legend_fill.as_ref(), f.legend_line.as_ref());
     tx_pr(w, &f.legend_text, None);
     w.close("c:legend");
@@ -176,11 +176,11 @@ fn positions(g: Group, stacked: bool) -> &'static [LabelPos] {
     }
 }
 
-/// `c:dLbls`: what labels show (nothing when `show` is off), where, their number format, box and
-/// font.
-pub(super) fn dlbls(w: &mut W, l: &DataLabels, show: bool, g: Group, stacked: bool) {
+/// `c:dLbls`: what labels show (nothing when `show` is off), where, their number format
+/// (`num_fmt`, the series'), box and font.
+pub(super) fn dlbls(w: &mut W, l: &DataLabels, num_fmt: Option<&str>, show: bool, g: Group, stacked: bool) {
     w.open0("c:dLbls");
-    if let Some(code) = l.num_fmt.as_deref().filter(|c| !c.trim().is_empty()) {
+    if let Some(code) = num_fmt.filter(|c| !c.trim().is_empty() && !c.trim().eq_ignore_ascii_case("general")) {
         w.empty("c:numFmt", A::new().a("formatCode", code).a("sourceLinked", 0));
     }
     sp_pr(w, l.fill.as_ref(), l.line.as_ref());

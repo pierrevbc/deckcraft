@@ -4,8 +4,9 @@
 
 use deckcraft_color::Rgba;
 use deckcraft_model::Shape;
-use deckcraft_model::chart::Chart;
-use deckcraft_model::chart_format::{AxisFormat, ChartText, Crosses, LabelPos, TickMark, format_number};
+use deckcraft_model::chart::{Chart, Series};
+use deckcraft_model::chart_format::{AxisFormat, ChartText, Crosses, LabelPos, TickMark};
+use deckcraft_model::numfmt;
 use deckcraft_model::resolve::Ctx;
 use deckcraft_model::style::{ColorRef, Fill, Line};
 use deckcraft_model::text::{Align, Anchor, Bullet, TextBody};
@@ -32,9 +33,11 @@ impl Text {
 }
 
 /// The chart's own text: [`ChartFormat::text`](deckcraft_model::chart_format::ChartFormat::text)
-/// over the chart's text colour, at `size` unless it sets one.
+/// over the chart's text colour, at the chart's text size
+/// ([`Chart::text_size`](deckcraft_model::chart::Chart::text_size)), else `size`.
 pub(super) fn base_text(rctx: &Ctx, c: &Chart, size: f64) -> (ChartText, Text) {
-    let t = c.format.text.over(&ChartText { color: c.text_color.clone(), ..Default::default() });
+    let own = c.text_size.filter(|s| s.is_finite()).map(|s| s.clamp(1.0, 400.0));
+    let t = ChartText { size: own, ..c.format.text.clone() }.over(&ChartText { color: c.text_color.clone(), ..Default::default() });
     let r = Text {
         size: t.size.unwrap_or(size),
         bold: t.bold.unwrap_or(false),
@@ -243,18 +246,27 @@ impl Scale {
     }
 }
 
-/// The value scale of a chart whose data spans `lo..hi`: fixed bounds and units where the axis
-/// sets them, "nice" ones otherwise.
+/// The primary value scale of a chart whose data spans `lo..hi`, with room for 8 intervals.
 #[cfg(test)]
 pub(super) fn value_scale(c: &Chart, lo: f64, hi: f64) -> Scale {
-    axis_scale(&c.format.val_axis, lo, hi, true, (c.y_min, c.y_max))
+    axis_scale(&c.format.val_axis, lo, hi, true, (c.y_min, c.y_max, c.y_major), 8, true)
 }
 
-/// The scale of axis `a` over data spanning `lo..hi`: the `fixed` bounds and the axis' units,
-/// base and direction where it sets them, "nice" ones otherwise. `zero`: the axis starts at
-/// zero (bars, areas); otherwise only when the data spans more than a sixth of its distance
+/// The scale of axis `a` over data spanning `lo..hi`: the `fixed` bounds and major unit where
+/// the chart sets them, else PowerPoint's automatic ones
+/// ([`axis_scale`](deckcraft_model::chart::axis_scale): `headroom` above the data, at most
+/// `intervals` intervals); the axis' log base, minor unit and direction. `zero`: the axis starts
+/// at zero (bars, areas); otherwise only when the data spans more than a sixth of its distance
 /// from zero (prices, X values).
-pub(super) fn axis_scale(a: &AxisFormat, lo: f64, hi: f64, zero: bool, fixed: (Option<f64>, Option<f64>)) -> Scale {
+pub(super) fn axis_scale(
+    a: &AxisFormat,
+    lo: f64,
+    hi: f64,
+    zero: bool,
+    fixed: (Option<f64>, Option<f64>, Option<f64>),
+    intervals: usize,
+    headroom: bool,
+) -> Scale {
     let reverse = a.reverse;
     let (lo, hi) = if lo.is_finite() && hi.is_finite() { (lo.min(hi), lo.max(hi)) } else { (0.0, 1.0) };
     let (y_min, y_max) = (fixed.0.filter(|v| v.is_finite()), fixed.1.filter(|v| v.is_finite()));
@@ -271,15 +283,17 @@ pub(super) fn axis_scale(a: &AxisFormat, lo: f64, hi: f64, zero: bool, fixed: (O
         return Scale { min, max, major: b, minor: b, log: Some(b), reverse };
     }
     let far = |a: f64, b: f64| (b - a).abs() > a.abs().max(b.abs()) / 6.0;
-    let (lo, hi) = if zero || (lo <= 0.0 && hi >= 0.0) || far(lo, hi) { (lo.min(0.0), hi.max(0.0)) } else { (lo, hi) };
-    let (nmin, nmax, nstep) = deckcraft_model::chart::nice_scale(lo, hi);
-    let min = y_min.unwrap_or(if y_max.is_some_and(|m| m <= nmin) { nmin - nstep * 5.0 } else { nmin });
-    let max = y_max.filter(|m| *m > min).unwrap_or(if nmax > min { nmax } else { min + nstep.max(1.0) });
-    let step = match a.major_unit.filter(|u| u.is_finite() && *u > 0.0) {
-        Some(u) => u.max((max - min) / 1000.0),
-        None if y_min.is_some() || y_max.is_some() => deckcraft_model::chart::nice_scale(min, max).2,
-        None => nstep,
+    let from_zero = zero || (lo <= 0.0 && hi >= 0.0) || far(lo, hi);
+    let auto = |lo: f64, hi: f64, fmin: Option<f64>| deckcraft_model::chart::axis_scale(lo, hi, fmin, y_max, fixed.2, intervals, headroom);
+    // Data away from zero (prices, X values): the axis starts a whole unit below it.
+    let y_min = match y_min {
+        None if !from_zero && lo > 0.0 => {
+            let (_, _, step) = auto(0.0, hi - lo, None);
+            Some((lo / step).floor() * step)
+        }
+        m => m,
     };
+    let (min, max, step) = auto(lo, hi, y_min.filter(|m| y_max.is_none_or(|x| *m < x)));
     let minor = a.minor_unit.filter(|u| u.is_finite() && *u > 0.0).unwrap_or(step / 5.0).max((max - min) / 1000.0);
     Scale { min, max, major: step, minor, log: None, reverse }
 }
@@ -389,14 +403,16 @@ pub(super) fn polyline(pts: &[Point], smooth: bool) -> BezPath {
     p
 }
 
-/// Text of the data label of one point.
-pub(super) fn label_text(c: &Chart, value: f64, percent: Option<f64>, cat: usize, series: &str) -> String {
+/// Text of the data label of point `cat` of series `s`: its value in the series' number format
+/// (else its axis', [`Chart::data_label`]; a 100% chart's values in General), its percentage in
+/// the series' format when that is a percentage, else `0%`.
+pub(super) fn label_text(c: &Chart, s: &Series, value: f64, percent: Option<f64>, cat: usize) -> String {
     let category = c.categories.get(cat).map(String::as_str).unwrap_or("");
-    let mut l = c.format.labels.clone();
-    if l.num_fmt.is_none() && c.format.val_axis.num_fmt.is_some() && !c.kind.percent() {
-        l.num_fmt.clone_from(&c.format.val_axis.num_fmt);
-    }
-    l.text_for(value, percent, category, series)
+    let lang = c.lang.as_deref();
+    let value = if s.number_format.is_none() && c.kind.percent() { numfmt::format("General", value, lang) } else { c.data_label(s, value) };
+    let pct_code = s.number_format.as_deref().filter(|f| f.contains('%')).unwrap_or("0%");
+    let percent = percent.map(|p| numfmt::format(pct_code, p, lang));
+    c.format.labels.text_for(&value, percent.as_deref(), category, &s.name)
 }
 
 /// The rect of a data label `w` wide next to a bar `r` (value end at `end_top`/`end_right`).
@@ -457,7 +473,7 @@ pub(super) struct KeyMarker {
 /// Lay out and draw the legend at the chart's legend position, taking its room from `area`
 /// unless it overlays the plot.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn legend(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, items: &[Entry], area: &mut Rect, t: &Text, m: Affine, w: f64) {
+pub(super) fn legend(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, items: &[Entry], area: &mut Rect, t: &Text, m: Affine) {
     let Some(pos) = c.legend.as_deref() else { return };
     if items.is_empty() {
         return;
@@ -493,21 +509,9 @@ pub(super) fn legend(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, items: &[Entry
     };
     let pad = t.size * 0.3;
     let (bw, bh) = (lw + pad * 2.0, lh + pad * 2.0);
-    let origin = match pos {
-        "t" => Point::new((w - bw) / 2.0, area.y0),
-        "l" => Point::new(area.x0, area.center().y - bh / 2.0),
-        "r" => Point::new(area.x1 - bw, area.center().y - bh / 2.0),
-        "tr" => Point::new(area.x1 - bw, area.y0),
-        _ => Point::new((w - bw) / 2.0, area.y1 - bh),
-    };
-    if !f.legend_overlay {
-        match pos {
-            "t" => area.y0 += bh + t.size * 0.5,
-            "l" => area.x0 += bw + t.size * 0.5,
-            "r" | "tr" => area.x1 -= bw + t.size * 0.5,
-            _ => area.y1 -= bh + t.size * 0.5,
-        }
-    }
+    // Placed as `c:legendPos` says, taking its room from the plot unless it overlays it.
+    let (origin, plot) = super::legend_layout(pos, (bw, bh), *area, t.size, c.legend_overlay);
+    *area = plot;
     let boxr = Rect::from_origin_size(origin, (bw, bh));
     element_box(ctx, rctx, f.legend_fill.as_ref(), f.legend_line.as_ref(), boxr, m, false);
     for (e, (x, y)) in items.iter().zip(places) {
@@ -534,20 +538,16 @@ pub(super) fn legend(ctx: &mut dyn Canvas, rctx: &Ctx, c: &Chart, items: &[Entry
     }
 }
 
-/// Number on an axis.
-pub(super) fn axis_number(v: f64, fmt: Option<&str>, percent: bool) -> String {
-    match fmt {
-        Some(f) => format_number(v, Some(f)),
-        None if percent => format_number(v, Some("0%")),
-        None => {
-            if (v - v.round()).abs() < 1e-9 {
-                format!("{}", v.round() as i64)
-            } else {
-                let s = format_number(v, Some("0.##########"));
-                if s.is_empty() { format!("{v}") } else { s }
-            }
-        }
-    }
+/// A value axis label: the axis' number format ([`Chart::axis_label`]); a 100% axis without one
+/// shows percentages.
+pub(super) fn value_label(c: &Chart, secondary: bool, v: f64, percent: bool) -> String {
+    let code = if secondary { &c.y2_format } else { &c.y_format };
+    if code.is_none() && percent { numfmt::format("0%", v, c.lang.as_deref()) } else { c.axis_label(secondary, v) }
+}
+
+/// An X axis label of a scatter or bubble chart, in the axis' number format.
+pub(super) fn x_label(c: &Chart, v: f64) -> String {
+    numfmt::format(c.format.cat_axis.num_fmt.as_deref().unwrap_or("General"), v, c.lang.as_deref())
 }
 
 #[cfg(test)]
@@ -563,7 +563,7 @@ mod tests {
         assert!(s.min <= 0.0 && s.max >= 5.1);
         c.y_min = Some(2.0);
         c.y_max = Some(6.0);
-        c.format.val_axis.major_unit = Some(0.5);
+        c.y_major = Some(0.5);
         let s = value_scale(&c, 0.0, 5.1);
         assert_eq!((s.min, s.max, s.major), (2.0, 6.0, 0.5));
         assert_eq!(s.ticks().len(), 9);
@@ -579,7 +579,7 @@ mod tests {
         assert!(!s.minor_ticks().is_empty());
         // Hostile units never loop forever.
         let mut c = Chart::sample(ChartType::Column);
-        c.format.val_axis.major_unit = Some(1e-300);
+        c.y_major = Some(1e-300);
         c.format.val_axis.minor_unit = Some(f64::MIN_POSITIVE);
         let s = value_scale(&c, 0.0, 1e300);
         assert!(s.ticks().len() <= 1001 && s.minor_ticks().len() <= 1001);
