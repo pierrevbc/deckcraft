@@ -207,3 +207,18 @@ fn slide_keys_are_stable_on_disk() {
     assert_eq!(r["written"].as_u64(), Some(0), "{r}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The File tab's Info page: a presentation saved as a folder reports the folder format and the
+/// size of its files.
+#[test]
+fn info_reports_a_folder_and_its_size() {
+    let root = scratch("info");
+    let dir = root.join("Info.deck");
+    let mut s = rich_session();
+    run(&mut s, "file.saveAs", json!({"path": dir.to_string_lossy()}));
+    let v = run(&mut s, "file.info", json!({}));
+    assert_eq!(v["format"], "deck");
+    let files: u64 = names(&dir).iter().map(|f| std::fs::metadata(dir.join(f)).unwrap().len()).sum();
+    assert_eq!(v["bytes"].as_u64(), Some(files), "{v}");
+    let _ = std::fs::remove_dir_all(&root);
+}

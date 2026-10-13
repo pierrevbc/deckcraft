@@ -152,6 +152,7 @@ imitate Microsoft's. No pixel comparison against PowerPoint screenshots has been
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | File tab: `.deck` folders in Open (Open Folder), Save As and Export › Change File Type; Info gives a folder's size |
 | 2026-10-12 | minor | Format pane Chart Options per chart element; Chart Design layouts, colours and styles; Chart Format tab |
 | 2026-10-12 | minor | Chart gallery in Insert ▸ Chart and Change Chart Type; the Chart Data window edits every chart type |
 | 2026-10-12 | minor | Table cells: caret and selection shown in the edited cell, clicks place the caret in the clicked cell, row and column borders drag to resize |

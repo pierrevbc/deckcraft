@@ -353,7 +353,7 @@ fn info(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.doc()?;
     let doc = &st.doc;
     #[cfg(not(target_arch = "wasm32"))]
-    let bytes = st.path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len());
+    let bytes = st.path.as_ref().and_then(|p| size_on_disk(std::path::Path::new(p), 0));
     #[cfg(target_arch = "wasm32")]
     let bytes: Option<u64> = None;
     Ok(json!({
@@ -367,6 +367,23 @@ fn info(s: &mut Session, _p: &Value) -> Result<Value> {
         "bytes": bytes,
         "properties": serde_json::to_value(&doc.props).unwrap_or_default(),
     }))
+}
+
+/// Size on disk of a saved presentation: its file, or every file of a `.deck` folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn size_on_disk(p: &std::path::Path, depth: usize) -> Option<u64> {
+    let m = std::fs::metadata(p).ok()?;
+    if !m.is_dir() {
+        return Some(m.len());
+    }
+    if depth > 4 {
+        return Some(0);
+    }
+    let mut total = 0u64;
+    for e in std::fs::read_dir(p).ok()?.flatten() {
+        total = total.saturating_add(size_on_disk(&e.path(), depth + 1).unwrap_or(0));
+    }
+    Some(total)
 }
 
 fn close(s: &mut Session, _p: &Value) -> Result<Value> {
