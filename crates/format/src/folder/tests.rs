@@ -471,3 +471,69 @@ fn media_extensions() {
     assert_eq!(media_ext("", "noext"), "bin");
     assert_eq!(media_ext("", "x.verylongext"), "bin");
 }
+
+/// What upstream's renderer and chart work added to the model since the folder format was written
+/// (gradient tile rectangles and `rotWithShape="0"`, upright and flipped, aligned picture tiles,
+/// combo charts on a secondary axis with axis bounds, number formats and hidden axes, overlaid
+/// legends, chart text sizes, transition options) survives a `.deck` folder as it survives a
+/// `.deckcraft` file, nulls whose absence matters included.
+#[test]
+fn upstream_model_additions_round_trip() {
+    use deckcraft_model::chart::Series;
+    use deckcraft_model::style::{ColorRef, Fill, Gradient, GradientShape, GradientStop, PictureMode};
+    let mut p = deck();
+    let media = p.add_media("tile.png", "image/png", vec![0x89, b'P', b'N', b'G', 9, 9]);
+    let stops = vec![
+        GradientStop { pos: 0.0, color: ColorRef::rgb(Rgba::rgb(255, 0, 0)) },
+        GradientStop { pos: 1.0, color: ColorRef::rgb(Rgba::rgb(0, 0, 255)) },
+    ];
+    let mut grad = shape(&mut p, "Tiled gradient", ShapeKind::Shape);
+    grad.fill = Some(Fill::Gradient(Gradient {
+        stops,
+        shape: GradientShape::Path { path: "circle".into(), focus: [0.0, 0.0, 1.0, 1.0] },
+        rotate_with_shape: false,
+        tile: [-1.0, -1.0, 0.0, 0.0],
+    }));
+    let mut tiles = shape(&mut p, "Tiles", ShapeKind::Shape);
+    tiles.fill = Some(Fill::Picture(PictureFill {
+        media,
+        mode: PictureMode::Tile { tx: 3.0, ty: -2.0, sx: 0.5, sy: 0.5, flip: "xy".into(), align: "ctr".into() },
+        upright: true,
+        ..Default::default()
+    }));
+    let mut c = Chart {
+        kind: ChartType::Column,
+        title: None,
+        categories: vec!["Q1".into(), "Q2".into()],
+        series: vec![
+            Series { name: "Sales".into(), values: vec![Some(1.0), Some(2.0)], number_format: Some("0.0%".into()), ..Default::default() },
+            Series { name: "Margin".into(), values: vec![Some(0.1), None], kind: Some(ChartType::Line), secondary_axis: true, ..Default::default() },
+        ],
+        legend: Some("l".into()),
+        legend_overlay: true,
+        text_size: Some(14.0),
+        title_size: Some(20.0),
+        ..Default::default()
+    };
+    (c.y_min, c.y_max, c.y_major, c.y_format) = (Some(0.0), Some(5.0), Some(1.0), Some("#,##0".into()));
+    (c.y2_min, c.y2_max, c.y2_hidden) = (Some(0.0), Some(1.0), true);
+    let chart = shape(&mut p, "Combo", ShapeKind::Chart(Box::new(c)));
+    let slide = Arc::make_mut(&mut p.slides[0]);
+    slide.shapes.extend([grad, tiles, chart]);
+    slide.transition = Some(deckcraft_model::anim::Transition {
+        kind: "wipe".into(),
+        option: "dl".into(),
+        duration_ms: 700,
+        advance_after_ms: Some(2000),
+        ..Default::default()
+    });
+    let q = via_folder(&p);
+    assert!(q == via_zip(&p), "folder and zip load differently");
+    let combo = q.slides[0].shapes.iter().find(|s| s.name == "Combo").and_then(|s| match &s.kind {
+        ShapeKind::Chart(c) => Some(c.clone()),
+        _ => None,
+    });
+    let combo = combo.expect("chart");
+    assert_eq!((combo.title.as_deref(), combo.legend.as_deref(), combo.legend_overlay), (None, Some("l"), true));
+    assert!(combo.series[1].secondary_axis && combo.y2_hidden);
+}
