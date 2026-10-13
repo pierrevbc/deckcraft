@@ -1,6 +1,6 @@
 # UI parity with PowerPoint
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (chart gallery, chart data window and chart formatting; previous: minor, table cells: caret, clicks between cells, border resizing; previous: minor, Export button in the title bar; previous: minor, right click selects the shape under the pointer; previous: minor, the frame of a text box being edited moves it; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (`.deck` folders in the File tab; previous: minor, chart gallery, chart data window and chart formatting; previous: minor, table cells: caret, clicks between cells, border resizing; previous: minor, Export button in the title bar; previous: minor, right click selects the shape under the pointer; previous: minor, the frame of a text box being edited moves it; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (text editing keys observed in PowerPoint for Windows, #268) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
@@ -156,6 +156,7 @@ imitate Microsoft's. No pixel comparison against PowerPoint screenshots has been
 | 2026-10-12 | minor | Table cells: caret and selection shown in the edited cell, clicks place the caret in the clicked cell, row and column borders drag to resize |
 | 2026-10-12 | minor | Format pane Chart Options per chart element; Chart Design layouts, colours and styles; Chart Format tab |
 | 2026-10-12 | minor | Chart gallery in Insert ▸ Chart and Change Chart Type; the Chart Data window edits every chart type |
+| 2026-10-13 | minor | File tab: `.deck` folders in Open (Open Folder), Save As and Export › Change File Type; Info gives a folder's size |
 | 2026-10-12 | minor | File tab (Backstage) observed in PowerPoint for Windows and matched (#76); the start screen is File › Home |
 | 2026-10-12 | minor | Off-slide objects drawn and editable around the slide in Normal view (#270) |
 | 2026-10-12 | minor | Selection Pane matched to PowerPoint (#133): drag and drop, arrows, groups, eye, Lock |
