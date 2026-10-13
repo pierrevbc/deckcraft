@@ -626,7 +626,11 @@ fn info(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.doc()?;
     let doc = &st.doc;
     #[cfg(not(target_arch = "wasm32"))]
-    let bytes = st.path.as_deref().and_then(crate::io::file_len);
+    // A `.deck` folder counts every file in it.
+    let bytes = st
+        .path
+        .as_deref()
+        .and_then(|p| if std::path::Path::new(p).is_dir() { crate::folder::size_on_disk(std::path::Path::new(p)) } else { crate::io::file_len(p) });
     #[cfg(target_arch = "wasm32")]
     let bytes: Option<u64> = None;
     Ok(json!({
