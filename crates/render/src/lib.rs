@@ -2293,6 +2293,9 @@ mod tests;
 mod tests_wild;
 
 #[cfg(test)]
+mod tests_vector;
+
+#[cfg(test)]
 mod mt_tests {
     use super::*;
 

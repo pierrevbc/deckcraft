@@ -337,3 +337,28 @@ fn pixel_only_drawing_exports_as_local_images() {
 fn shadow_of() -> Shadow {
     shadow().outer_shadow.expect("shadow")
 }
+
+/// Upright glyphs in East Asian vertical text (`eaVert`) each turn about their own em box, which a
+/// PDF text run can't express: they are drawn as outlines over the same text, invisible, so the
+/// characters still search, select and copy.
+#[test]
+fn upright_vertical_text_is_outlines_over_invisible_text() {
+    let mut p = deck(1);
+    let mut sh = Shape { id: ShapeId(904), xfrm: Some(Xfrm::new(100.0, 40.0, 120.0, 400.0)), text_box: true, ..Default::default() };
+    let mut body = TextBody::from_text("一二三");
+    body.body.vert = Some(deckcraft_model::text::TextDir::EaVertical);
+    body.paragraphs[0].runs[0].props.size = Some(40.0);
+    sh.text = Some(body);
+    add(&mut p, 0, sh);
+    let pdf = plain(&p, &opts(PageLayout::Slides));
+    // The run's text, drawn fully transparent (the outlines carry the ink).
+    assert!(count(&pdf, b"/Type/ExtGState/ca 0>>") > 0, "an invisible text layer for the upright run");
+    for c in "一二三".chars() {
+        assert!(count(&pdf, format!("<{:04X}>", c as u32).as_bytes()) > 0, "{c} is text");
+    }
+    let mut q = deck(1);
+    let mut sh = Shape { id: ShapeId(905), xfrm: Some(Xfrm::new(100.0, 40.0, 400.0, 100.0)), text_box: true, ..Default::default() };
+    sh.text = Some(TextBody::from_text("一二三"));
+    add(&mut q, 0, sh);
+    assert_eq!(count(&plain(&q, &opts(PageLayout::Slides)), b"/Type/ExtGState/ca 0>>"), 0, "horizontal text is drawn as text");
+}
