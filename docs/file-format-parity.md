@@ -24,7 +24,7 @@ PowerPoint opens and saves; Viewer = opens only).
 | `.odp` OpenDocument | Editor | no | no | | none |
 | `.thmx` Office theme | Viewer | no | no | Browse for themes is a P2 row | none |
 | `.deckcraft` native (zip + JSON) | n/a | yes (also `.slidecraft`) | yes | Lossless for the DeckCraft model, forward compatible | `crates/format` tests |
-| PDF | export | no | yes | Slides, notes pages, handouts (1–9), links, bookmarks. Vector: shapes, outlines, gradients, transparency, tables and charts as PDF paths; real text in embedded font subsets; JPEG/PNG pictures embedded as they are. Shapes with shadow, glow, soft edges or reflection, and pattern fills, rasterize alone at `dpi`; `vector: false` keeps whole-slide rasters | `crates/pdf` tests |
+| PDF | export | no | yes | Slides, notes pages, handouts (1–9), links, bookmarks. Vector: shapes, outlines, gradients, transparency, tables and charts as PDF paths; real text in embedded font subsets; JPEG/PNG pictures embedded as they are. Shapes with shadow, glow, soft edges, reflection or a fill overlay, pattern fills, rectangle and outline path gradients, text shadows and glows, and colour emoji rasterize alone at `dpi`; WMF/EMF pictures embed as pixels; `vector: false` keeps whole-slide rasters | `crates/pdf` tests |
 | Outline `.rtf` / `.txt` | export (RTF), import (outline) | `.txt`/`.md` outline (`slide.fromOutline`) | `.txt` outline | No RTF | engine tests |
 | PNG / JPEG slide images | export | n/a | yes (`file.export`, `deckcraft-cli render`) | Matches the editor's renderer | render tests |
 | TIFF / BMP / GIF slide images | export | n/a | no | Easy (the `image` crate writes them) | none |

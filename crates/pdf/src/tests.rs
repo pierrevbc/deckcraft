@@ -260,3 +260,80 @@ fn handout_boxes_fit_the_paper() {
         }
     }
 }
+
+/// A placeable WMF, 2 x 1 inch: a red rectangle over the left half.
+fn half_red_wmf() -> Vec<u8> {
+    fn rec(func: u16, params: &[i16]) -> Vec<u8> {
+        let mut v = ((3 + params.len()) as u32).to_le_bytes().to_vec();
+        v.extend(func.to_le_bytes());
+        for p in params {
+            v.extend(p.to_le_bytes());
+        }
+        v
+    }
+    let body = [rec(0x02FC, &[0, 0xFF, 0, 0]), rec(0x012D, &[0]), rec(0x041B, &[1440, 1440, 0, 0]), rec(0, &[])].concat();
+    let mut f = 0x9AC6_CDD7u32.to_le_bytes().to_vec();
+    f.extend(0u16.to_le_bytes());
+    for v in [0i16, 0, 2880, 1440] {
+        f.extend(v.to_le_bytes());
+    }
+    f.extend(1440u16.to_le_bytes());
+    f.extend(0u32.to_le_bytes());
+    f.extend(0u16.to_le_bytes());
+    let total = (f.len() + 18 + body.len()) / 2;
+    for v in [1u16, 9, 0x300] {
+        f.extend(v.to_le_bytes());
+    }
+    f.extend((total as u32).to_le_bytes());
+    f.extend(16u16.to_le_bytes());
+    f.extend(0u32.to_le_bytes());
+    f.extend(0u16.to_le_bytes());
+    f.extend(body);
+    f
+}
+
+/// What the renderer draws only as pixels (pattern fills, rectangle path gradients, text shadows,
+/// WMF pictures, colour emoji) exports as local images in a vector PDF: nothing panics, nothing is
+/// dropped, and the text around stays text.
+#[test]
+fn pixel_only_drawing_exports_as_local_images() {
+    use deckcraft_model::style::{PatternFill, Shadow};
+    let mut p = deck(1);
+    let pat = PatternFill { preset: "dkVert".into(), fg: ColorRef::rgb(Rgba::rgb(0x20, 0x20, 0x20)), bg: ColorRef::rgb(Rgba::rgb(0xF0, 0xF0, 0xF0)) };
+    add(&mut p, 0, rect(900, 40.0, 300.0, ShapeFill::Pattern(pat)));
+    let stops = vec![
+        GradientStop { pos: 0.0, color: ColorRef::rgb(Rgba::rgb(255, 0, 0)) },
+        GradientStop { pos: 1.0, color: ColorRef::rgb(Rgba::rgb(0, 0, 255)) },
+    ];
+    let path =
+        Gradient { stops, shape: GradientShape::Path { path: "rect".into(), focus: [0.5, 0.5, 0.5, 0.5] }, rotate_with_shape: true, tile: [0.0; 4] };
+    add(&mut p, 0, rect(901, 260.0, 300.0, ShapeFill::Gradient(path)));
+    let mut text = Shape { id: ShapeId(902), xfrm: Some(Xfrm::new(480.0, 280.0, 440.0, 120.0)), text_box: true, ..Default::default() };
+    let mut body = TextBody::from_text("Shade \u{1F600} me");
+    body.paragraphs[0].runs[0].props.size = Some(40.0);
+    body.paragraphs[0].runs[0].props.shadow =
+        Some(Shadow { color: ColorRef::rgb(Rgba { r: 0, g: 0, b: 0, a: 160 }), blur: 4.0, dist: 4.0, ..shadow_of() });
+    text.text = Some(body);
+    add(&mut p, 0, text);
+    let media = p.add_media("image1.wmf", "image/x-wmf", half_red_wmf());
+    let pic = Shape {
+        id: ShapeId(903),
+        xfrm: Some(Xfrm::new(480.0, 420.0, 200.0, 100.0)),
+        kind: ShapeKind::Picture { fill: PictureFill { media, ..Default::default() } },
+        ..Default::default()
+    };
+    add(&mut p, 0, pic);
+    let pdf = plain(&p, &PdfOptions { dpi: 72.0, ..opts(PageLayout::Slides) });
+    let imgs = images(&pdf);
+    // Pattern, path gradient, text shadow, metafile (emoji when a colour font is installed),
+    // each a local image well under the page size, soft masks included.
+    assert!(imgs.len() >= 4, "{imgs:?}");
+    assert!(imgs.iter().all(|(w, h)| *w < 600 && *h < 300), "{imgs:?}");
+    for c in "Shademe".chars() {
+        assert!(count(&pdf, format!("<{:04X}>", c as u32).as_bytes()) > 0, "{c} is text");
+    }
+}
+
+fn shadow_of() -> Shadow {
+    shadow().outer_shadow.expect("shadow")
+}
