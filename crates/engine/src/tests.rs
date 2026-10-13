@@ -1082,3 +1082,23 @@ fn right_click_in_edited_text_keeps_the_text_selection() {
     assert!(st.selection.text.is_none());
     assert_eq!(st.selection.shapes, vec![b]);
 }
+
+/// Right click with the frame drag: on the frame of the box being edited (just inside or just
+/// outside its edge, rotated or not) the caret and text selection stay and the text menu opens;
+/// a corner of a rotated box's bounding box, outside the box itself, leaves editing.
+#[test]
+fn right_click_on_the_frame_of_edited_text_keeps_editing() {
+    let (mut s, id, x) = editing_text_box(30.0);
+    let before = s.doc().unwrap().selection.text.clone().unwrap();
+    for (lx, ly) in [(-2.0, x.h / 2.0), (x.w / 2.0, 1.0), (x.w + 2.0, x.h / 2.0)] {
+        let (px, py) = on_box(&x, lx, ly);
+        let r = right_click(&mut s, px, py);
+        assert_eq!(r["editing"], true, "{r}");
+        assert_eq!(r["selected"], json!([id]));
+        assert_eq!(s.doc().unwrap().selection.text.as_ref(), Some(&before));
+    }
+    let b = x.bounds();
+    let r = right_click(&mut s, b.x0 + 5.0, b.y0 + 5.0);
+    assert_eq!(r["editing"], false, "{r}");
+    assert!(s.doc().unwrap().selection.text.is_none());
+}

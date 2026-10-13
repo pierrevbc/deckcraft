@@ -859,14 +859,12 @@ impl Session {
             return Ok(Value::Null);
         }
         let st = self.doc()?;
-        // The same zone in which a left press places the caret (`down`).
-        if let Some(t) = &st.selection.text
-            && !t.notes
-            && t.cell.is_none()
-            && let Some(sh) = st.shape(t.shape)
-            && xfrm_of(&st.doc, &st.selection, sh).bounds().inflate(tol, tol).contains(p)
+        // The box being edited, its frame included (`down` places the caret or moves the box
+        // there): the text menu, the caret and text selection kept.
+        if let Some(e) = edited_box(st)
+            && edit_zone(&e.xfrm, p, tol) != EditZone::Outside
         {
-            return Ok(json!({"hit": {"kind": "text", "id": t.shape}, "selected": [t.shape], "editing": true}));
+            return Ok(json!({"hit": {"kind": "text", "id": e.id}, "selected": [e.id], "editing": true}));
         }
         let hit = self.hit_test(p, tol);
         let id = match &hit {
