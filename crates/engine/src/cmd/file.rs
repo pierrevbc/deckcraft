@@ -206,7 +206,7 @@ pub fn read_presentation_file(path: &str) -> Result<LoadedFile> {
     // A `.deck` folder (or its `deck.json`) opens as the folder.
     if let Some(dir) = crate::folder::folder_to_open(path) {
         let doc = crate::folder::open(&dir)?;
-        return Ok(LoadedFile { path: dir.to_string_lossy().to_string(), doc, native: true, damaged: vec![] });
+        return Ok(LoadedFile { path: dir.to_string_lossy().to_string(), doc, native: true, damaged: Damage::default() });
     }
     let bytes = crate::io::read_file(path).map_err(EngineError::Other)?;
     let (doc, damaged) = open_checked(path, &bytes)?;
